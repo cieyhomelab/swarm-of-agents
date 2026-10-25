@@ -2,17 +2,113 @@
 # sw-gate — agent-free gate of the hourly sw-sweep workflow.
 #
 # Prints the health line from sw-doctor and exactly one decision line:
-#   URUCHOM: NIC        nothing to start in this cycle
-# Further decisions (URUCHOM: GENERATOR, URUCHOM: OCENA, ...) are added by
-# later implementation steps; see the technical sections of the spec.
+#   URUCHOM: NIC          nothing to start in this cycle
+#   URUCHOM: GENERATOR    no active project: generate an idea
+#   URUCHOM: OCENA <nr>   idea <nr> is "sw-w-ocenie" but its evaluation task is lost
+# Further decisions (URUCHOM: SPEC, ...) are added by later implementation
+# steps; see the technical sections of the spec.
+#
+# Active project: open "sw-pomysl" issue in the control repository that is
+# "sw-w-ocenie", "sw-zatwierdzony" or has a "sw-stan-*" label other than
+# "sw-stan-wdrozony" / "sw-stan-wstrzymany". Projects already handed over to the
+# sh-* chain (repository with .ai/cezar/workflows/sh-delivery.yml) are left
+# alone. Read-only: changes nothing.
 # Exit code 0 when the gate ran on a healthy runtime, 1 otherwise.
 set -uo pipefail
 
 here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
 
 if ! "$here/sw-doctor"; then
   echo "URUCHOM: NIC"
   exit 1
 fi
 
-echo "URUCHOM: NIC"
+control="$(jq -r '.controlRepo // empty' "$SW_CONFIG")"
+control_name="${control#*/}"
+
+# Cezar project id of the control repository (health lists projects by name).
+project_id="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null \
+  | jq -r --arg n "$control_name" '[.projects[]? | select(.name == $n) | .id][0] // empty' 2>/dev/null)"
+project_id="${project_id:-${CEZ_PROJECT_ID:-}}"
+
+# cezar_get <path> — body on stdout; status 0 = ok, 1 = missing (404), 2 = other failure.
+cezar_get() {
+  local out code
+  out="$(curl -sS --max-time 10 -w '\n%{http_code}' "$SW_CEZAR_URL$1" 2>/dev/null)" || return 2
+  code="${out##*$'\n'}"
+  case "$code" in
+    200) printf '%s' "${out%$'\n'*}" ;;
+    404) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# Without a verifiable picture of the cycle the safe decision is to wait.
+undecided() {
+  sw_log "bramka: $1"
+  echo "URUCHOM: NIC"
+  exit 0
+}
+
+[ -n "$project_id" ] || undecided "brak projektu $control_name w Cezarze"
+[ -n "$control" ] || undecided "brak controlRepo w konfiguracji"
+
+# Mutual exclusion: another queued/running sw-sweep (not this one) wins.
+runs="$(cezar_get "/api/v1/p/$project_id/runs")" || undecided "nie mozna odczytac zadan Cezara"
+other="$(printf '%s' "$runs" | jq -r --arg me "${CEZ_RUN_ID:-}" '
+  (if type == "array" then . else (.runs // []) end)
+  | map(select(.workflow == "sw-sweep" and (.status == "queued" or .status == "running") and .id != $me))
+  | length' 2>/dev/null)" || undecided "niepoprawna lista zadan Cezara"
+if [ "${other:-0}" -gt 0 ]; then
+  echo "URUCHOM: NIC"
+  exit 0
+fi
+
+issues="$(gh api --paginate "repos/$control/issues?labels=sw-pomysl&state=open&per_page=100" 2>/dev/null)" \
+  || undecided "nie mozna odczytac issues $control"
+issues="$(printf '%s' "$issues" | jq -c '
+  [.[]? | select(.pull_request == null)
+        | {number, labels: [.labels[].name],
+           meta: ((.body // "") | capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {}))}
+        | select(any(.labels[]; . == "sw-w-ocenie" or . == "sw-zatwierdzony"
+              or (startswith("sw-stan-") and . != "sw-stan-wdrozony" and . != "sw-stan-wstrzymany")))]' 2>/dev/null)" \
+  || undecided "niepoprawna lista issues"
+
+active=0
+lost=""
+while IFS= read -r issue; do
+  [ -n "$issue" ] || continue
+  number="$(printf '%s' "$issue" | jq -r .number)"
+  repo="$(printf '%s' "$issue" | jq -r '.meta.repo // empty')"
+  if [ -n "$repo" ] && gh api "repos/$repo/contents/.ai/cezar/workflows/sh-delivery.yml" >/dev/null 2>&1; then
+    continue # sh-* project: not ours
+  fi
+  active=$((active + 1))
+  if printf '%s' "$issue" | jq -e '.labels | index("sw-w-ocenie")' >/dev/null; then
+    eval_id="$(printf '%s' "$issue" | jq -r '.meta.evalRunId // empty')"
+    if [ -z "$eval_id" ]; then
+      state=lost
+    else
+      body="$(cezar_get "/api/v1/p/$project_id/runs/$eval_id")"
+      case $? in
+        0) state="$(printf '%s' "$body" | jq -r '.status // "unknown"')" ;;
+        1) state=lost ;;
+        *) undecided "nie mozna odczytac zadania oceny $eval_id" ;;
+      esac
+    fi
+    case "$state" in
+      waiting|running|queued) ;;
+      *) [ -n "$lost" ] || lost="$number" ;;
+    esac
+  fi
+done < <(printf '%s' "$issues" | jq -c 'sort_by(.number)[]')
+
+if [ -n "$lost" ]; then
+  echo "URUCHOM: OCENA $lost"
+elif [ "$active" -gt 0 ]; then
+  echo "URUCHOM: NIC"
+else
+  echo "URUCHOM: GENERATOR"
+fi

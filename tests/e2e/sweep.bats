@@ -19,6 +19,33 @@ gate_command() {
   run bash -c "$cmd"
   [ "$status" -eq 0 ]
   [[ "$output" == *"STAN: OK"* ]]
+  [[ "$output" == *"URUCHOM: GENERATOR"* ]]
+}
+
+@test "sweep gate waits while an idea is under evaluation" {
+  curl -fsS -X POST "$MOCK_URL/__control" -d '{
+    "issues": [{"number": 3, "state": "open", "body": "<!-- sw:meta {\"evalRunId\":\"r1\"} -->",
+                "labels": [{"name": "sw-pomysl"}, {"name": "sw-w-ocenie"}]}],
+    "runs": [{"id": "r1", "workflow": "sw-ocena", "status": "waiting"}]}' >/dev/null
+  run bash -c "$(gate_command)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"URUCHOM: NIC"* ]]
+}
+
+@test "sweep gate restarts the evaluation of a lost task" {
+  curl -fsS -X POST "$MOCK_URL/__control" -d '{
+    "issues": [{"number": 3, "state": "open", "body": "<!-- sw:meta {\"evalRunId\":\"r1\"} -->",
+                "labels": [{"name": "sw-pomysl"}, {"name": "sw-w-ocenie"}]}],
+    "runs": []}' >/dev/null
+  run bash -c "$(gate_command)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"URUCHOM: OCENA 3"* ]]
+}
+
+@test "sweep gate yields to another running sweep" {
+  curl -fsS -X POST "$MOCK_URL/__control" -d '{"runs": [{"id": "x", "workflow": "sw-sweep", "status": "running"}]}' >/dev/null
+  run bash -c "$(gate_command)"
+  [ "$status" -eq 0 ]
   [[ "$output" == *"URUCHOM: NIC"* ]]
 }
 
