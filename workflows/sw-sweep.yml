@@ -1,0 +1,36 @@
+# Cezar workflow run hourly by the "sw: przegląd co godzinę" automation in the
+# sw-control repository. The gate (bin/sw-gate, no agent) checks runtime health
+# and decides what to start in this cycle. Agents are added by later steps.
+#
+# A broken runtime ends the task with status success on purpose: cezar-push
+# alerts the owner for every task entering "failed", and the spec allows no
+# such messages. The failure is visible in the gate output; repeated failures
+# are reported once by a later step (spec, technical sections, etap 1).
+#
+# Run as an autonomous task.
+
+version: 2
+name: sw-sweep
+description: Godzinny przegląd roju. Bramka sprawdza stan i decyduje, co uruchomić w tym cyklu.
+
+nodes:
+  - id: start
+    type: start
+
+  - id: gate
+    type: check
+    name: Bramka przeglądu
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-gate"
+
+  - id: done
+    type: end
+    status: success
+
+  - id: degraded
+    type: end
+    status: success
+
+edges:
+  - { from: start, to: gate }
+  - { from: gate.pass, to: done }
+  - { from: gate.fail, to: degraded }

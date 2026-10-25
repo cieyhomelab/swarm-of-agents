@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# sw-doctor — health check of the swarm-of-agents runtime on the VPS.
+#
+# Checks the prerequisites every sweep needs and prints one status line:
+#   STAN: OK
+#   STAN: BLAD <reason>; <reason>...
+# Warnings that do not block work go to stderr as "UWAGA: ...".
+# Exit code 0 when healthy, 1 otherwise. Read-only: changes nothing.
+set -uo pipefail
+
+# shellcheck source=bin/lib/common.sh
+. "$(dirname "$0")/lib/common.sh"
+
+problems=()
+warn() { echo "UWAGA: $*" >&2; }
+
+for cmd in gh jq curl; do
+  command -v "$cmd" >/dev/null 2>&1 || problems+=("brak polecenia $cmd")
+done
+
+config_ok=0
+if [ ! -r "$SW_CONFIG" ]; then
+  problems+=("brak konfiguracji $SW_CONFIG")
+elif ! jq -e 'type == "object"' "$SW_CONFIG" >/dev/null 2>&1; then
+  problems+=("niepoprawna konfiguracja $SW_CONFIG")
+else
+  config_ok=1
+fi
+
+# Models run on the Claude Max plan only: no API keys, gateways or cloud
+# providers that would bill outside the plan.
+for var in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL \
+           CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY; do
+  if [ -n "${!var:-}" ]; then
+    problems+=("ustawiony $var (dozwolony tylko plan Claude Max)")
+  fi
+done
+
+if command -v gh >/dev/null 2>&1; then
+  if ! gh api user --jq .login >/dev/null 2>&1; then
+    problems+=("gh nie jest zalogowany")
+  elif [ "$config_ok" -eq 1 ]; then
+    # The control repository holds ideas and must never be public.
+    control="$(jq -r '.controlRepo // empty' "$SW_CONFIG")"
+    if [ -n "$control" ]; then
+      private="$(gh api "repos/$control" --jq .private 2>/dev/null)" || private=missing
+      case "$private" in
+        true) ;;
+        missing) warn "repozytorium sterujace $control nie istnieje (tworzy je sw-start)" ;;
+        *) problems+=("repozytorium sterujace $control nie jest prywatne") ;;
+      esac
+    fi
+  fi
+fi
+
+if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  health="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null)" || health=""
+  # Explicit empty check: jq 1.6 (Debian bookworm) returns 0 for -e on empty input.
+  if [ -z "$health" ] || ! printf '%s' "$health" | jq -e '.version | strings' >/dev/null 2>&1; then
+    problems+=("Cezar niedostepny pod $SW_CEZAR_URL")
+  elif [ "$config_ok" -eq 1 ]; then
+    want="$(jq -r '.maxParallelAgents // 3' "$SW_CONFIG")"
+    have="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/workspace/config" 2>/dev/null \
+      | jq -r '.resources.maxParallel // empty' 2>/dev/null)"
+    if [ -n "$have" ] && [ "$have" -lt "$want" ]; then
+      warn "resources.maxParallel Cezara ($have) mniejsze niz maxParallelAgents ($want); limit jest wspolny dla calego Cezara"
+    fi
+  fi
+fi
+
+if [ "${#problems[@]}" -eq 0 ]; then
+  echo "STAN: OK"
+  exit 0
+fi
+
+reasons=$(printf '%s; ' "${problems[@]}")
+echo "STAN: BLAD ${reasons%; }"
+exit 1

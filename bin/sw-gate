@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# sw-gate — agent-free gate of the hourly sw-sweep workflow.
+#
+# Prints the health line from sw-doctor and exactly one decision line:
+#   URUCHOM: NIC        nothing to start in this cycle
+# Further decisions (URUCHOM: GENERATOR, URUCHOM: OCENA, ...) are added by
+# later implementation steps; see the technical sections of the spec.
+# Exit code 0 when the gate ran on a healthy runtime, 1 otherwise.
+set -uo pipefail
+
+here="$(dirname "$0")"
+
+if ! "$here/sw-doctor"; then
+  echo "URUCHOM: NIC"
+  exit 1
+fi
+
+echo "URUCHOM: NIC"

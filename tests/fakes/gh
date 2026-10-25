@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Fake GitHub CLI for tests. Supports `gh api [-X METHOD] PATH [--jq EXPR]`
+# by forwarding to the mock API at $FAKE_GH_API_URL. Anything else fails.
+set -euo pipefail
+
+[ "${1:-}" = "api" ] || { echo "fake gh: unsupported command: $*" >&2; exit 2; }
+shift
+
+method=GET
+path=""
+jq_expr=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -X|--method) method="$2"; shift 2 ;;
+    --jq|-q) jq_expr="$2"; shift 2 ;;
+    -*) echo "fake gh: unsupported flag: $1" >&2; exit 2 ;;
+    *) path="$1"; shift ;;
+  esac
+done
+
+: "${FAKE_GH_API_URL:?fake gh: FAKE_GH_API_URL not set}"
+body="$(curl -fsS -X "$method" "$FAKE_GH_API_URL/github/${path#/}")" || exit 1
+if [ -n "$jq_expr" ]; then
+  printf '%s' "$body" | jq -r "$jq_expr"
+else
+  printf '%s\n' "$body"
+fi
