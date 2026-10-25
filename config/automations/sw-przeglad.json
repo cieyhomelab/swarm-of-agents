@@ -1,0 +1,12 @@
+{
+  "name": "sw: przegląd co godzinę",
+  "description": "Godzinny przegląd roju: uruchamia workflow sw-sweep w repozytorium sw-control.",
+  "kind": "schedule",
+  "schedule": { "type": "hours", "every": 1 },
+  "task": {
+    "prompt": "Uruchom przegląd roju (workflow sw-sweep). Data: {{date}}.",
+    "workflow": "sw-sweep",
+    "worktree": false,
+    "autonomous": true
+  }
+}

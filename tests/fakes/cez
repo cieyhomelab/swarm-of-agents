@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Fake `cez automation` CLI for tests (use it through SW_CEZ). Supports
+# `automation list`, `automation create --file F [--enable]` and
+# `automation update ID --file F`, forwarding to the mock Cezar API at
+# $SW_CEZAR_URL. Everything else, including delete, fails.
+set -euo pipefail
+
+[ "${1:-}" = "automation" ] || { echo "fake cez: unsupported command: $*" >&2; exit 2; }
+shift
+sub="${1:-}"
+[ $# -eq 0 ] || shift
+
+file=""
+enable=false
+id=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --file) file="$2"; shift 2 ;;
+    --enable) enable=true; shift ;;
+    -*) echo "fake cez: unsupported flag: $1" >&2; exit 2 ;;
+    *) id="$1"; shift ;;
+  esac
+done
+
+: "${SW_CEZAR_URL:?fake cez: SW_CEZAR_URL not set}"
+base="$SW_CEZAR_URL/cez/automations"
+post() { curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$1"; }
+
+case "$sub" in
+  list)
+    curl -fsS "$base" | jq -r '.[] | "\(.id)  \(if .enabled then "enabled" else "paused" end)  every 3600s  schedule  launched 0, duplicates 0, errors 0  next 2026-01-01T00:00:00.000Z  \(.name)"'
+    ;;
+  create)
+    jq --argjson e "$enable" '. + {enabled: $e}' "$file" | post "$base" | jq -r .id
+    ;;
+  update)
+    [ -n "$id" ] || { echo "fake cez: update needs an id" >&2; exit 2; }
+    post "$base/$id" < "$file" | jq -r .id
+    ;;
+  *)
+    echo "fake cez: unsupported subcommand: $sub" >&2
+    exit 2
+    ;;
+esac

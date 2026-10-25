@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# sw-start — one-time (and safely repeatable) setup of the private control
+# repository sw-control: creates it when missing, adds the sw-* labels from
+# config/labels.json, copies the sw-sweep workflow, opens the sw-dziennik
+# journal issue and installs/updates the hourly Cezar automation by name.
+#
+# Prints progress lines, then one status line:
+#   STAN: OK
+#   STAN: BLAD <reason>
+# Exit code 0 on success, 1 otherwise. Every step reads first and writes only
+# what is missing or different, so a second run changes nothing. Only objects
+# named sw-* / "sw: ..." are touched; no automation is ever deleted.
+#
+# Environment: SW_CEZ (command replacing `node "$CEZ_BIN"`, used by tests),
+# SW_CONTROL_DIR (local directory of the sw-control project, working
+# directory of the automation commands).
+set -uo pipefail
+
+# shellcheck source=bin/lib/common.sh
+. "$(dirname "$0")/lib/common.sh"
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+info() { echo "sw-start: $*"; }
+
+cez() {
+  if [ -n "${SW_CEZ:-}" ]; then
+    "$SW_CEZ" "$@"
+  else
+    node "${CEZ_BIN:?CEZ_BIN is not set}" "$@"
+  fi
+}
+
+for cmd in gh jq curl base64; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "brak polecenia $cmd"
+done
+[ -r "$SW_CONFIG" ] || fail "brak konfiguracji $SW_CONFIG"
+
+repo="$(jq -r '.controlRepo // empty' "$SW_CONFIG")"
+owner="${repo%%/*}"
+name="${repo#*/}"
+if [ -z "$repo" ] || [ "$owner" = "$repo" ]; then
+  fail "controlRepo w $SW_CONFIG musi miec postac wlasciciel/nazwa"
+fi
+case "$name" in sw-*) ;; *) fail "repozytorium sterujace $repo musi miec nazwe sw-*" ;; esac
+
+gh api user --jq .login >/dev/null 2>&1 || fail "gh nie jest zalogowany"
+
+# 1. Repository: created through Cezar (private repository + project) only when missing.
+private="$(gh api "repos/$repo" --jq .private 2>/dev/null)" || private=missing
+if [ "$private" = missing ]; then
+  info "tworze prywatne repozytorium $repo"
+  payload="$(jq -n --arg n "$name" --arg o "$owner" '{name: $n, github: {owner: $o}}')"
+  curl -fsS --max-time 120 -X POST -H 'Content-Type: application/json' -d "$payload" \
+    "$SW_CEZAR_URL/api/v1/projects/create" >/dev/null || fail "Cezar nie utworzyl projektu $name"
+  private="$(gh api "repos/$repo" --jq .private 2>/dev/null)" || fail "repozytorium $repo nie istnieje po utworzeniu"
+fi
+[ "$private" = true ] || fail "repozytorium sterujace $repo nie jest prywatne"
+
+# 2. Labels: only the missing ones.
+labels_file="$SW_ROOT/config/labels.json"
+color="$(jq -r '.color // "5319E7"' "$labels_file")"
+existing="$(gh api --paginate "repos/$repo/labels?per_page=100" --jq '.[].name')" || fail "nie mozna odczytac etykiet $repo"
+while IFS= read -r label; do
+  [ -n "$label" ] || continue
+  if printf '%s\n' "$existing" | grep -qxF -- "$label"; then continue; fi
+  jq -n --arg n "$label" --arg c "$color" '{name: $n, color: $c}' \
+    | gh api -X POST "repos/$repo/labels" --input - >/dev/null || fail "nie mozna utworzyc etykiety $label"
+  info "etykieta $label"
+done < <(jq -r '.system[]' "$labels_file")
+
+# 3. Workflow copy: created or updated only when the content differs.
+copy_file() { # copy_file <local path> <path in repo>
+  local src="$1" dest="$2" current sha remote
+  current="$(gh api "repos/$repo/contents/$dest" 2>/dev/null)" || current=""
+  sha="$(printf '%s' "$current" | jq -r '.sha // empty' 2>/dev/null)" || sha=""
+  if [ -n "$sha" ]; then
+    remote="$(printf '%s' "$current" | jq -r '.content // empty' | tr -d '\n' | base64 -d 2>/dev/null)" || remote=""
+    if [ "$remote" = "$(cat "$src")" ]; then return 0; fi
+  fi
+  jq -n --arg m "sw-start: $dest" --arg c "$(base64 -w0 "$src")" --arg s "$sha" \
+    '{message: $m, content: $c} + (if $s == "" then {} else {sha: $s} end)' \
+    | gh api -X PUT "repos/$repo/contents/$dest" --input - >/dev/null || fail "nie mozna zapisac $dest"
+  info "zapisano $dest"
+}
+copy_file "$SW_ROOT/workflows/sw-sweep.yml" ".ai/cezar/workflows/sw-sweep.yml"
+
+# 4. Journal issue.
+journal="$(gh api "repos/$repo/issues?labels=sw-dziennik&state=all&per_page=1" --jq '.[0].number // empty')" \
+  || fail "nie mozna odczytac issue dziennika"
+if [ -z "$journal" ]; then
+  jq -n '{title: "sw-dziennik", labels: ["sw-dziennik"],
+          body: "Dziennik roju: jeden komentarz na zdarzenie. Bez danych osobowych."}' \
+    | gh api -X POST "repos/$repo/issues" --input - >/dev/null || fail "nie mozna utworzyc issue dziennika"
+  info "issue sw-dziennik"
+fi
+
+# 5. Automation, matched by exact name; other automations are never touched.
+def="$SW_ROOT/config/automations/sw-przeglad.json"
+auto_name="$(jq -r .name "$def")"
+every="$(jq -r '.cycleHours // 1' "$SW_CONFIG")"
+case "$every" in 1|2|3|4|6|8|12) ;; *) fail "cycleHours=$every nieobslugiwane (dozwolone: 1, 2, 3, 4, 6, 8, 12)" ;; esac
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+jq --argjson e "$every" '.schedule.every = $e' "$def" > "$tmp"
+
+if [ -n "${SW_CONTROL_DIR:-}" ]; then
+  cd "$SW_CONTROL_DIR" || fail "brak katalogu $SW_CONTROL_DIR"
+fi
+list="$(cez automation list)" || fail "cez automation list nie powiodlo sie"
+auto_id=""
+while IFS= read -r line; do
+  candidate="${line%% *}"
+  if [[ "$candidate" =~ ^[0-9a-zA-Z-]{4,}$ && "$line" == *"  $auto_name" ]]; then
+    auto_id="$candidate"
+    break
+  fi
+done <<< "$list"
+
+if [ -n "$auto_id" ]; then
+  cez automation update "$auto_id" --file "$tmp" >/dev/null || fail "nie mozna zaktualizowac automatyzacji $auto_name"
+  info "zaktualizowano automatyzacje $auto_name"
+else
+  cez automation create --file "$tmp" --enable >/dev/null || fail "nie mozna utworzyc automatyzacji $auto_name"
+  info "utworzono automatyzacje $auto_name"
+fi
+
+echo "STAN: OK"
