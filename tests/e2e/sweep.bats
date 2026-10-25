@@ -4,7 +4,7 @@
 
 setup() {
   : "${MOCK_URL:?run through scripts/test-e2e.sh}"
-  curl -fsS -X POST -d '{"health_status": 200, "github_user": "cieyhomelab"}' "$MOCK_URL/__control" >/dev/null
+  curl -fsS -X POST -d '{"reset": true}' "$MOCK_URL/__control" >/dev/null
 }
 
 gate_command() {
@@ -39,4 +39,11 @@ gate_command() {
   [ "$(readlink "$skills/sh-analityk")" = "$HOME/sh-skills/skills/sh-analityk" ]
   [ "$(cat "$skills/sh-analityk/SKILL.md")" = "old" ]
   [ -z "$(find "$skills" -mindepth 1 -maxdepth 1 -name 'sw-*' ! -type l)" ]
+}
+
+@test "public control repository stops the sweep" {
+  curl -fsS -X POST -d '{"control_private": false}' "$MOCK_URL/__control" >/dev/null
+  run bash -c "$(gate_command)"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"nie jest prywatne"* ]]
 }

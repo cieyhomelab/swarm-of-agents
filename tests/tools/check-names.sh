@@ -47,4 +47,13 @@ if [ -f config/labels.json ]; then
   done < <(jq -r '.system[]?' config/labels.json)
 fi
 
+# References to sh-skills elements inside product code. Only the etap-1
+# handover script may name sh-* (it starts sh-start in an app project).
+allow_ref='^bin/sw-handover-sh:'
+while IFS= read -r hit; do
+  [[ "$hit" =~ $allow_ref ]] && continue
+  err "reference to sh-skills in $hit"
+done < <(grep -rnE '(^|[^a-z0-9_-])sh-[a-z]|"sh: |sh-skills' workflows bin config skills 2>/dev/null \
+         | grep -v '^skills/README.md:' || true)
+
 exit "$fail"

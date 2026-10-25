@@ -2,6 +2,11 @@
 # sw-control repository. The gate (bin/sw-gate, no agent) checks runtime health
 # and decides what to start in this cycle. Agents are added by later steps.
 #
+# A broken runtime ends the task with status success on purpose: cezar-push
+# alerts the owner for every task entering "failed", and the spec allows no
+# such messages. The failure is visible in the gate output; repeated failures
+# are reported once by a later step (spec, technical sections, etap 1).
+#
 # Run as an autonomous task.
 
 version: 2
@@ -21,11 +26,11 @@ nodes:
     type: end
     status: success
 
-  - id: broken
+  - id: degraded
     type: end
-    status: failed
+    status: success
 
 edges:
   - { from: start, to: gate }
   - { from: gate.pass, to: done }
-  - { from: gate.fail, to: broken }
+  - { from: gate.fail, to: degraded }

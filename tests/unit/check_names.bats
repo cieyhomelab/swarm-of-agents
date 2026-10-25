@@ -53,3 +53,18 @@ check() { SW_CHECK_ROOT="$FAKE" run bash "$ROOT/tests/tools/check-names.sh"; }
   [ "$status" -eq 1 ]
   [[ "$output" == *"'sh-architekt'"* ]]
 }
+
+@test "reference to an sh- element inside a workflow or script fails" {
+  printf 'nodes:\n  - { id: x, type: agent, skill: sh-inzynier }\n' > "$FAKE/workflows/sw-a.yml"
+  printf '#!/usr/bin/env bash\n~/sh-skills/bin/sh-notify spec\n' > "$FAKE/bin/sw-b"
+  check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"workflows/sw-a.yml"* ]]
+  [[ "$output" == *"bin/sw-b"* ]]
+}
+
+@test "the etap-1 handover script may reference sh-start" {
+  printf '#!/usr/bin/env bash\n# starts sh-start\n' > "$FAKE/bin/sw-handover-sh"
+  check
+  [ "$status" -eq 0 ]
+}

@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: tests/e2e/mock.Dockerfile
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health')"]
       interval: 1s
       timeout: 2s
       retries: 30

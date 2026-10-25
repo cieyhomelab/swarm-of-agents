@@ -11,6 +11,7 @@
   "stalledAfterHours": 3,
   "githubOwner": "cieyhomelab",
   "controlRepo": "cieyhomelab/sw-control",
+  "requiredChecks": ["checks", "e2e"],
   "models": {
     "generator": "opus",
     "analyst": "opus",

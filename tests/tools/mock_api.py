@@ -2,10 +2,14 @@
 """Mock of the external APIs used by swarm-of-agents scripts in tests.
 
 Routes:
-  GET  /health                Cezar health
-  GET  /github/<path>         GitHub REST, fixtures from the in-memory state
-  POST /__control             change state: {"health_status": 503, "github_user": null}
-  GET  /__requests            requests received so far (JSON list)
+  GET  /api/v1/health             Cezar health (healthResponseSchema subset)
+  GET  /api/v1/workspace/config   Cezar workspace config (resources.maxParallel)
+  GET  /github/<path>             GitHub REST, from the in-memory state
+  POST /__control                 change state, e.g. {"health_status": 503}
+  GET  /__requests                requests received so far (JSON list)
+
+State keys: health_status, github_user (null = logged out), control_repo,
+control_private (null = repository missing), max_parallel.
 
 Usage: mock_api.py [--port N] [--port-file FILE]   (port 0 = random)
 """
@@ -13,7 +17,14 @@ import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-STATE = {"health_status": 200, "github_user": "cieyhomelab"}
+DEFAULTS = {
+    "health_status": 200,
+    "github_user": "cieyhomelab",
+    "control_repo": "cieyhomelab/sw-control",
+    "control_private": True,
+    "max_parallel": 3,
+}
+STATE = dict(DEFAULTS)
 REQUESTS = []
 
 
@@ -31,15 +42,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         REQUESTS.append({"method": "GET", "path": self.path})
-        if self.path == "/health":
+        if self.path == "/api/v1/health":
             status = STATE["health_status"]
-            return self._send(status, {"ok": status == 200})
+            if status != 200:
+                return self._send(status, {"error": "unavailable"})
+            return self._send(200, {"version": "0.0.0-mock", "projects": [], "bootProject": "mock"})
+        if self.path == "/api/v1/workspace/config":
+            return self._send(200, {"resources": {"maxParallel": STATE["max_parallel"]}})
         if self.path == "/__requests":
             return self._send(200, REQUESTS)
         if self.path == "/github/user":
             if STATE["github_user"] is None:
                 return self._send(401, {"message": "Bad credentials"})
             return self._send(200, {"login": STATE["github_user"]})
+        if self.path == f"/github/repos/{STATE['control_repo']}":
+            if STATE["control_private"] is None:
+                return self._send(404, {"message": "Not Found"})
+            return self._send(200, {"full_name": STATE["control_repo"], "private": STATE["control_private"]})
         return self._send(404, {"message": "Not Found"})
 
     def do_POST(self):
@@ -47,7 +66,12 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b"{}"
         REQUESTS.append({"method": "POST", "path": self.path})
         if self.path == "/__control":
-            STATE.update(json.loads(raw or b"{}"))
+            update = json.loads(raw or b"{}")
+            if update.get("reset"):
+                STATE.clear()
+                STATE.update(DEFAULTS)
+                REQUESTS.clear()
+            STATE.update({k: v for k, v in update.items() if k != "reset"})
             return self._send(200, STATE)
         return self._send(404, {"message": "Not Found"})
 

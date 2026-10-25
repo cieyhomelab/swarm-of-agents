@@ -1,0 +1,5 @@
+.git
+dist
+.env
+*.env
+.ai/runs

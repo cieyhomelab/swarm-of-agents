@@ -16,8 +16,8 @@ NODE_PORTS = {
     "loop": {"repeat", "exhausted"},
     "agent": {"done", "failed"},  # plus one port per declared verdict
     "check": {"pass", "fail"},
-    "gate.human": {"approve", "reject", "timeout"},
-    "ask-user": {"answered", "timeout"},
+    "gate.human": {"approve", "reject"},  # plus "timeout" with timeoutMs
+    "ask-user": {"answered"},  # plus "timeout" with timeoutMs
     "dispatch": {"done", "failed"},
     "workflow": {"done", "failed"},
     "fork": {"1", "2", "3", "4"},
@@ -63,8 +63,15 @@ def validate(path):
             errors.append(f"{path}: node '{nid}' has unknown type '{ntype}'")
             continue
         ports = set(NODE_PORTS[ntype])
+        if ntype in ("gate.human", "ask-user") and node.get("timeoutMs"):
+            ports.add("timeout")
         if ntype == "agent":
             ports |= set(node.get("verdicts") or [])
+            # Spec: Claude Max only, explicit model from config/sw.json.
+            if node.get("runner") != "claude":
+                errors.append(f"{path}: agent node '{nid}' must set runner: claude")
+            if not node.get("model"):
+                errors.append(f"{path}: agent node '{nid}' must set an explicit model")
         if ntype == "check" and not node.get("command"):
             errors.append(f"{path}: check node '{nid}' needs a command")
         nodes[nid] = ports
@@ -73,6 +80,8 @@ def validate(path):
     if len(starts) != 1:
         errors.append(f"{path}: exactly one start node required")
 
+    types = {n.get("id"): n.get("type") for n in doc.get("nodes") or []}
+    graph = {nid: [] for nid in nodes}
     for edge in doc.get("edges") or []:
         src, dst = str(edge.get("from", "")), str(edge.get("to", ""))
         src_node, _, port = src.partition(".")
@@ -82,6 +91,46 @@ def validate(path):
             errors.append(f"{path}: node '{src_node}' has no port '{port}'")
         if dst not in nodes:
             errors.append(f"{path}: edge to unknown node '{dst}'")
+        elif src_node in nodes:
+            graph[src_node].append(dst)
+
+    errors += reachability_and_cycles(path, graph, types)
+    return errors
+
+
+def reachability_and_cycles(path, graph, types):
+    """Every node reachable from start; every cycle passes through a loop node."""
+    errors = []
+    start = [n for n, t in types.items() if t == "start"]
+    seen, stack = set(), list(start)
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(graph.get(cur, []))
+    for nid in graph:
+        if nid not in seen:
+            errors.append(f"{path}: node '{nid}' is unreachable from start")
+    # Cezar: every cycle must pass through a loop node.
+    sub = {n: [d for d in ds if types.get(d) != "loop"]
+           for n, ds in graph.items() if types.get(n) != "loop"}
+    state = {}
+
+    def visit(n):
+        state[n] = 1
+        for d in sub.get(n, []):
+            if state.get(d) == 1:
+                return True
+            if d in sub and state.get(d) is None and visit(d):
+                return True
+        state[n] = 2
+        return False
+
+    for n in sub:
+        if state.get(n) is None and visit(n):
+            errors.append(f"{path}: cycle without a loop node")
+            break
     return errors
 
 
