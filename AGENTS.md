@@ -81,6 +81,7 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
   - wyjście dla węzłów Cezara to linie `STAN: …` i `URUCHOM: …`, które workflow sprawdza warunkiem `contains`;
   - błędy idą na stderr; kod wyjścia 0 oznacza sukces.
 - **Logowanie:** `sw_log` (UTC, stderr). Nigdy nie loguj tokenów ani treści rozmów.
+- **Dziennik i powiadomienia:** `sw-log` i `sw-notify` przepuszczają tekst przez `sw_scrub` (maska adresów e-mail i tokenów). `sw-gate` zapisuje w dzienniku tylko `STAN: BLAD`, `STAN: OK` i znaczniki `powiadomienie: …` (deduplikacja).
 - **Obsługa błędów:** skrypt wykrywający problem kończy się kodem 1 i opisuje przyczynę w linii `STAN: BLAD …`. Nie maskuj błędów `|| true`, chyba że błąd jest oczekiwany i opisany komentarzem.
 - **Stan:**
   - zapisujesz go tylko na GitHubie (etykiety, komentarze, issue) przez `gh`;

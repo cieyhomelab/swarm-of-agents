@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# sw-notify <rodzaj> <repo> <nr> <tytul> <url> — push notification for the owner
+# through the cezar-push gate (POST /m/push/gate). rodzaj: spec | blocked.
+# Only gate, repo, number, title (<= 100 chars) and url are sent; the token goes
+# in the X-Cezar-Push-Token header, never in the body, the logs or the arguments.
+# Prints "WYNIK: WYSLANO" (exit 0), or "WYNIK: POMINIETO" when there is no token
+# to send with (exit 0) or the gate refused the notification (exit 1).
+set -uo pipefail
+
+# shellcheck source=bin/lib/common.sh
+. "$(dirname "$0")/lib/common.sh"
+sw_require curl jq
+
+[ $# -eq 5 ] || sw_die "uzycie: sw-notify <rodzaj> <repo> <nr> <tytul> <url>"
+kind="$1" repo="$2" number="$3" title="$4" url="$5"
+
+case "$kind" in spec | blocked) ;; *) sw_die "nieznany rodzaj powiadomienia: $kind" ;; esac
+[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || sw_die "niepoprawne repozytorium: $repo"
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "niepoprawny numer: $number"
+[[ "$url" == https://github.com/* ]] || sw_die "adres musi zaczynac sie od https://github.com/"
+
+token_file="${SW_PUSH_TOKEN_FILE:-$HOME/.cezar-push/gate-token}"
+if [ ! -r "$token_file" ]; then
+  echo "UWAGA: brak pliku z tokenem bramki powiadomien" >&2
+  echo "WYNIK: POMINIETO"
+  exit 0
+fi
+token="$(tr -d '\r\n' < "$token_file")"
+[ -n "$token" ] || { echo "UWAGA: pusty token bramki powiadomien" >&2; echo "WYNIK: POMINIETO"; exit 0; }
+
+title="$(printf '%s' "$title" | sw_scrub | tr '\n' ' ')"
+title="${title:0:100}"
+body="$(jq -nc --arg gate "$kind" --arg repo "$repo" --argjson number "$number" \
+  --arg title "$title" --arg url "$url" '{gate: $gate, repo: $repo, number: $number, title: $title, url: $url}')"
+
+code="$(printf '%s' "$body" | curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+  -X POST "$SW_PUSH_URL/m/push/gate" \
+  -H 'Content-Type: application/json' -H 'Origin:' -H 'X-Forwarded-For:' \
+  -H @<(printf 'X-Cezar-Push-Token: %s\n' "$token") \
+  --data-binary @- 2>/dev/null)"
+
+if [ "$code" = 202 ]; then
+  echo "WYNIK: WYSLANO"
+else
+  echo "UWAGA: bramka powiadomien odpowiedziala kodem ${code:-brak}" >&2
+  echo "WYNIK: POMINIETO"
+  exit 1
+fi

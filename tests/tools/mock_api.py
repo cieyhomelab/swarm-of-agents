@@ -10,6 +10,9 @@ Routes:
   GET  /github/<path>             GitHub REST, from the in-memory state
   POST /github/<path>             GitHub REST writes: labels, issues (create)
   PUT  /github/<path>             GitHub REST writes: repository contents
+  GET/POST /github/repos/<control>/issues/<n>/comments   issue comments, state "comments" ("<n>" -> list of {body, created_at})
+  POST /m/push/gate               cezar-push gate: 401 without the token (state "push_token", default "test-token"),
+                                  400 for Origin/X-Forwarded-For or a body other than {gate, repo, number, title<=100, url}; else 202
   GET  /api/v1/p/<project>/runs[/<id>]        Cezar tasks of one project, from state "runs"
                                               (list of records; a record with "project" is visible only there)
   GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged})
@@ -27,6 +30,7 @@ Usage: mock_api.py [--port N] [--port-file FILE]   (port 0 = random)
 import argparse
 import base64
 import copy
+import datetime
 import json
 import re
 from urllib.parse import parse_qs, urlsplit
@@ -45,6 +49,8 @@ DEFAULTS = {
     "pulls": {},
     "repo_files": [],
     "runs": [],
+    "comments": {},
+    "push_token": "test-token",
     "automations": [
         {"id": "a1b2c3d4-0001", "name": "sh: architekt", "enabled": True, "project": "swarm-of-agents"},
         {"id": "a1b2c3d4-0002", "name": "sh: realizacja", "enabled": True, "project": "swarm-of-agents"},
@@ -116,6 +122,9 @@ class Handler(BaseHTTPRequestHandler):
             rest = url.path[len(repo_prefix):]
             if rest == "labels":
                 return self._send(200, STATE["labels"])
+            comments = re.fullmatch(r"issues/(\d+)/comments", rest)
+            if comments:
+                return self._send(200, STATE["comments"].get(comments[1], []))
             if rest == "issues":
                 wanted = parse_qs(url.query).get("labels", [None])[0]
                 state = parse_qs(url.query).get("state", ["open"])[0]
@@ -144,6 +153,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw)
             STATE["control_private"] = True
             return self._send(200, {"id": "proj-" + body["name"], "name": body["name"]})
+        if self.path == "/m/push/gate":
+            return self._push_gate(raw)
         created = re.fullmatch(r"/cez/p/([^/]+)/automations", self.path)
         if created:
             definition = json.loads(raw)
@@ -168,6 +179,12 @@ class Handler(BaseHTTPRequestHandler):
             if rest == "labels":
                 STATE["labels"].append({"name": body["name"]})
                 return self._send(201, body)
+            comments = re.fullmatch(r"issues/(\d+)/comments", rest)
+            if comments:
+                now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                comment = {"body": body["body"], "created_at": now}
+                STATE["comments"].setdefault(comments[1], []).append(comment)
+                return self._send(201, comment)
             if rest == "issues":
                 issue = {"number": len(STATE["issues"]) + 1, "title": body["title"],
                          "labels": [{"name": n} for n in body.get("labels", [])]}
@@ -212,8 +229,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(201, {"content": {"sha": sha}})
         return self._send(404, {"message": "Not Found"})
 
+    def _push_gate(self, raw):
+        if self.headers.get("X-Cezar-Push-Token") != STATE["push_token"]:
+            return self._send(401, {"error": "unauthorized"})
+        if self.headers.get("Origin") is not None or self.headers.get("X-Forwarded-For") is not None:
+            return self._send(400, {"error": "forbidden header"})
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            return self._send(400, {"error": "invalid json"})
+        valid = (
+            isinstance(body, dict)
+            and set(body) == {"gate", "repo", "number", "title", "url"}
+            and body["gate"] in ("spec", "merge", "blocked")
+            and isinstance(body["number"], int)
+            and isinstance(body["title"], str) and len(body["title"]) <= 100
+            and isinstance(body["url"], str) and body["url"].startswith("https://github.com/")
+        )
+        if not valid:
+            return self._send(400, {"error": "invalid body"})
+        return self._send(202, {"accepted": True})
+
     def _record(self, method, raw):
         entry = {"method": method, "path": self.path}
+        if self.path == "/m/push/gate":
+            entry["headers"] = {k.lower(): v for k, v in self.headers.items()}
         if raw and raw != b"{}":
             try:
                 entry["body"] = json.loads(raw)
