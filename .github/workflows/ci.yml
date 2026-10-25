@@ -50,7 +50,8 @@ jobs:
           cat a.log b.log
           left="$(docker ps -a --format '{{.Names}}' | grep '^e2e-' || true)
           $(docker network ls --format '{{.Name}}' | grep '^e2e-' || true)
-          $(docker volume ls --format '{{.Name}}' | grep '^e2e-' || true)"
+          $(docker volume ls --format '{{.Name}}' | grep '^e2e-' || true)
+          $(docker images --format '{{.Repository}}' | grep '^e2e-' || true)"
           if [ -n "$(echo "$left" | tr -d '[:space:]')" ]; then
             echo "leftover e2e resources:"; echo "$left"; status=1
           fi
