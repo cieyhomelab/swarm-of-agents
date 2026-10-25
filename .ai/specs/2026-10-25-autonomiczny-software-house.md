@@ -8,7 +8,16 @@ Obecny software house (sh-skills, sh-control) wymaga człowieka na dwóch bramka
 
 Cel: jedna interakcja właściciela na aplikację (ocena pomysłu), reszta w pełni autonomicznie, z zabezpieczeniami, które zastępują przegląd człowieka.
 
-**Sukces:** rośnie odsetek zatwierdzonych pomysłów doprowadzonych do działającej aplikacji bez udziału człowieka (zatwierdzone → wdrożone bez interwencji właściciela).
+**Sukces:** rośnie odsetek zatwierdzonych pomysłów doprowadzonych do wdrożenia bez interwencji właściciela (S13).
+
+## Pojęcia
+- **Cykl:** jedno uruchomienie przeglądu systemu. Interwał w konfiguracji, domyślnie co godzinę.
+- **Aktywny projekt:** pomysł w stanie „w ocenie” albo „zatwierdzony” albo projekt w stanie innym niż „wdrożony” i „wstrzymany”. Naraz istnieje najwyżej jeden aktywny projekt.
+- **Inny model:** inny model Claude niż ten, który przygotował ocenianą zmianę.
+- **Ponowienie:** ponowne uruchomienie zadania po jego niepowodzeniu (błąd wykonania albo brak postępu, czyli brak commitu i zmiany stanu zadania przez 3 godziny).
+- **Runda poprawek:** poprawka po uwagach recenzji, testu lub przeglądu. Liczona osobno od ponowień.
+- **Wyczerpanie prób zadania:** przekroczenie liczby ponowień albo rund poprawek z konfiguracji.
+- **Prywatny adres:** adres aplikacji, pod którym żądanie bez uwierzytelnienia właściciela kończy się odmową albo przekierowaniem do logowania.
 
 ## Użytkownicy i role
 
@@ -16,218 +25,277 @@ Cel: jedna interakcja właściciela na aplikację (ocena pomysłu), reszta w pe�
 - Dostaje powiadomienie o nowym pomyśle, ocenia go w rozmowie z modelem, zatwierdza albo odrzuca.
 - Dostaje powiadomienia o gotowej aplikacji i o wstrzymanym projekcie.
 - Korzysta z gotowych aplikacji pod prywatnym adresem.
-- Nie zatwierdza specyfikacji, nie merguje PR, nie tworzy repozytoriów.
+- Od etapu 2 nie zatwierdza specyfikacji, nie merguje PR i nie tworzy repozytoriów.
 
 ### Agenci (rój)
 | Rola | Zadanie |
 |------|---------|
-| Generator pomysłów | Wymyśla pomysł, sprawdza go w sieci, odrzuca kategorie wykluczone, przygotowuje ocenę i rekomendację. |
-| Analityk | Prowadzi rozmowę z właścicielem przy ocenie pomysłu i pisze specyfikację. |
-| Architekt | Wybiera stos, dzieli aplikację na moduły z kontraktami, przygotowuje szkielet. |
+| Generator pomysłów | Wymyśla pomysł, sprawdza go w sieci, odrzuca nieudane próby, przygotowuje kartę pomysłu. |
+| Analityk (wariant autonomiczny) | Prowadzi rozmowę oceny z właścicielem i pisze specyfikację bez dalszego dopytywania. |
+| Architekt | Wybiera stos, dzieli aplikację na moduły z kontraktami, przygotowuje szkielet i CI. |
 | Kierownik | Zakłada zadania, przydziela moduły, pilnuje limitów i stanu projektu. |
 | Inżynier (kilku równolegle) | Implementuje moduły według kontraktów. |
-| Integrator | Składa moduły w całość i doprowadza do działania pełnej aplikacji. |
+| Integrator (nowa rola) | Składa moduły w całość i doprowadza do działania pełnej aplikacji. |
 | Tester | Weryfikuje działanie według kryteriów akceptacji. |
-| Reviewer | Recenzuje zmiany; działa na innym modelu niż inżynier. |
-| Przegląd bezpieczeństwa | Osobny agent na innym modelu niż autor zmian. Sprawdza zmiany przed merge i aplikację przed wydaniem. |
+| Reviewer | Recenzuje zmiany; inny model niż autor zmiany. |
+| Przegląd bezpieczeństwa | Osobny agent; inny model niż autor zmiany. Sprawdza PR przed merge i aplikację przed wdrożeniem. |
 
-Role od architekta do reviewera to obecne role sh-* rozwijane w tym repozytorium, bez bramek ludzkich.
+Analityk, architekt, kierownik, inżynier, tester i reviewer to obecne role sh-* rozwijane w tym repozytorium, bez bramek ludzkich. Generator, integrator i przegląd bezpieczeństwa to nowe role.
 
 ## Scenariusze
 
 ### S1: Generowanie pomysłu
-1. System nie ma aktywnego projektu (poprzednia aplikacja wdrożona, projekt wstrzymany albo pomysł odrzucony).
+1. W cyklu system nie ma aktywnego projektu.
 2. Generator wymyśla pomysł, który poprawia jakość życia, sytuację finansową lub zdrowie ludzi.
-3. Sprawdza w sieci, czy problem jest realny i czy nie istnieje już dobre darmowe rozwiązanie.
-4. Odrzuca pomysły z kategorii wykluczonych (patrz „Wymagania niefunkcjonalne → Bezpieczeństwo”) i generuje kolejny.
-5. Przygotowuje kartę pomysłu: problem, dla kogo, co robi aplikacja, wynik sprawdzenia w sieci ze źródłami, ocenę według kryteriów i rekomendację.
-6. Wysyła właścicielowi powiadomienie push.
+3. Sprawdza w sieci, czy problem jest realny i czy istnieje już bezpłatne narzędzie realizujące główną funkcję pomysłu.
+4. Odrzuca próbę nieudaną i próbuje ponownie, najwyżej 5 razy w cyklu. Nieudana próba to:
+   - pomysł z kategorii wykluczonej (patrz „Bezpieczeństwo”),
+   - istnieje bezpłatne narzędzie realizujące główną funkcję,
+   - brak co najmniej jednego źródła potwierdzającego realność problemu,
+   - duplikat pomysłu wcześniej odrzuconego (ten sam tytuł albo ten sam problem dla tej samej grupy ludzi).
+5. Dla udanej próby przygotowuje kartę pomysłu z polami:
+   - problem i dla kogo,
+   - co robi aplikacja,
+   - wynik sprawdzenia w sieci ze źródłami,
+   - ocena 1–5 w trzech kryteriach: wpływ na jakość życia, finanse lub zdrowie; wykonalność w limicie czasu projektu; ryzyko,
+   - rekomendacja: „rekomenduję” albo „nie rekomenduję”, z jednym zdaniem uzasadnienia.
+6. Pomysł przechodzi w stan „w ocenie”, a właściciel dostaje powiadomienie push.
 
 **Kryteria akceptacji**
-- Zakładając brak aktywnego projektu, gdy system jest uruchomiony, wtedy w ciągu jednego cyklu przeglądu powstaje karta pomysłu, a właściciel dostaje powiadomienie push.
-- Zakładając aktywny projekt (w budowie lub czekający na ocenę), wtedy nowy pomysł nie powstaje.
-- Zakładając pomysł z kategorii wykluczonej, wtedy nie trafia do właściciela, a w dzienniku systemu jest wpis z powodem odrzucenia.
-- Zakładając kartę pomysłu, wtedy zawiera ona wszystkie pola z kroku 5, w tym co najmniej jedno źródło z sieci dla sprawdzenia realności problemu.
+- Zakładając brak aktywnego projektu i udaną próbę w cyklu, wtedy powstaje karta pomysłu ze wszystkimi polami z kroku 5, pomysł ma stan „w ocenie”, a właściciel dostaje powiadomienie push.
+- Zakładając 5 nieudanych prób w cyklu, wtedy karta nie powstaje, powiadomienie nie jest wysyłane, a w dzienniku jest 5 wpisów z przyczyną odrzucenia każdej próby.
+- Zakładając aktywny projekt, wtedy w cyklu nie powstaje nowy pomysł.
+- Zakładając próbę z kategorii wykluczonej, wtedy nie trafia do właściciela, a dziennik zawiera przyczynę „kategoria wykluczona”.
+- Zakładając próbę będącą duplikatem odrzuconego pomysłu, wtedy nie trafia do właściciela, a dziennik zawiera przyczynę „duplikat”.
 
 ### S2: Ocena i zatwierdzenie pomysłu
 1. Właściciel otwiera powiadomienie w aplikacji na telefon.
 2. Widzi kartę pomysłu i rozmawia z modelem (analityk): zadaje pytania, doprecyzowuje zakres, odpowiada na pytania modelu.
-3. Model podsumowuje ustalenia.
-4. Właściciel zatwierdza pomysł.
-5. System przechodzi do S4.
+3. Model pokazuje podsumowanie ustaleń.
+4. Właściciel naciska „Zatwierdź”.
+5. Pomysł przechodzi w stan „zatwierdzony”, a system przechodzi do S4.
 
 **Kryteria akceptacji**
-- Zakładając kartę pomysłu, gdy właściciel otwiera powiadomienie, wtedy widzi kartę i pole rozmowy z modelem.
-- Zakładając rozmowę, gdy właściciel zatwierdza pomysł, wtedy pomysł ma stan „zatwierdzony”, a ustalenia z rozmowy są zapisane jako wejście dla specyfikacji.
-- Zakładając zatwierdzenie, wtedy system nie prosi właściciela o żadną dalszą decyzję aż do powiadomienia o gotowej lub wstrzymanej aplikacji.
+- Zakładając pomysł „w ocenie”, gdy właściciel otwiera powiadomienie, wtedy widzi kartę, pole rozmowy oraz przyciski „Zatwierdź” i „Odrzuć”.
+- Zakładając rozmowę, wtedy przed zatwierdzeniem widoczne jest podsumowanie ustaleń.
+- Zakładając naciśnięcie „Zatwierdź”, wtedy pomysł ma stan „zatwierdzony”, a podsumowanie ustaleń jest zapisane jako wejście dla specyfikacji.
+- Zakładając zatwierdzenie (od etapu 2), wtedy aż do powiadomienia o wdrożeniu albo wstrzymaniu właściciel nie dostaje żadnej wiadomości wymagającej odpowiedzi.
 
 ### S3: Odrzucenie pomysłu
-1. Właściciel w rozmowie odrzuca pomysł i opcjonalnie podaje powód.
-2. Generator od razu tworzy kolejny pomysł (S1), biorąc pod uwagę powód odrzucenia.
+1. Właściciel naciska „Odrzuć” i opcjonalnie wpisuje powód.
+2. Pomysł przechodzi w stan „odrzucony”.
+3. Generator tworzy kolejny pomysł w następnym cyklu (S1), z powodem odrzucenia jako wskazówką.
 
 **Kryteria akceptacji**
-- Zakładając odrzucenie z powodem, wtedy kolejna karta pomysłu powstaje bez dodatkowej akcji właściciela, a powód jest przekazany generatorowi.
-- Zakładając odrzucenie, wtedy odrzucony pomysł nie jest proponowany ponownie.
+- Zakładając odrzucenie z powodem, wtedy w następnym cyklu generator uruchamia się bez akcji właściciela, a powód jest przekazany generatorowi.
+- Zakładając odrzucony pomysł, wtedy żadna późniejsza karta nie ma tego samego tytułu ani nie opisuje tego samego problemu dla tej samej grupy ludzi.
 
-### S4: Repozytorium i specyfikacja bez bramki
-1. System tworzy prywatne repozytorium na koncie `cieyhomelab`.
-2. Analityk pisze specyfikację na podstawie ustaleń z S2.
-3. Niezależny przegląd (agent ze świeżym kontekstem) sprawdza spójność i testowalność; analityk poprawia uwagi.
-4. Specyfikacja jest mergowana automatycznie.
-
-**Kryteria akceptacji**
-- Zakładając zatwierdzony pomysł, wtedy powstaje prywatne repozytorium z commitem na gałęzi bazowej.
-- Zakładając specyfikację, wtedy każdy scenariusz ma kryteria akceptacji, a PR zawiera wynik niezależnego przeglądu.
-- Zakładając pozytywny przegląd specyfikacji, wtedy PR jest mergowany bez udziału właściciela.
-
-### S5: Architektura i podział na moduły
-1. Architekt wybiera stos i dzieli aplikację na moduły.
-2. Dla każdego modułu określa kontrakt (co moduł udostępnia i czego potrzebuje od innych).
-3. Decyduje, czy moduły są częściami jednej aplikacji, czy osobnymi usługami.
-4. PR architektury przechodzi automatyczny merge (S8).
+### S4: Repozytorium i specyfikacja aplikacji
+1. System tworzy prywatne repozytorium na koncie `cieyhomelab` o nazwie z tytułu pomysłu w kebab-case. Gdy nazwa jest zajęta, dodaje przyrostek `-2`, `-3` itd. Repozytorium ma README na gałęzi bazowej.
+2. Analityk pisze specyfikację aplikacji na podstawie podsumowania z S2. Luki rozstrzyga sam najprostszą, odwracalną opcją i zapisuje każdą w sekcji „Założenia”.
+3. Niezależny przegląd (agent bez dostępu do rozumowania analityka) wydaje werdykt „zatwierdzona” albo „uwagi”; sprawdza też, czy każdy scenariusz ma kryteria, dla których da się napisać test E2E. Analityk poprawia uwagi, najwyżej 2 rundy poprawek.
+4. PR ze specyfikacją jest mergowany automatycznie, gdy przegląd wydał werdykt „zatwierdzona”, a przegląd bezpieczeństwa przeszedł. Warunek CI nie dotyczy tego PR, bo CI powstaje w S5.
+5. Projekt przechodzi w stan „architektura”.
 
 **Kryteria akceptacji**
-- Zakładając zmergowaną specyfikację, wtedy powstaje PR architektury z listą modułów i kontraktem każdego modułu.
-- Zakładając listę modułów, wtedy każdy scenariusz ze specyfikacji jest przypisany do co najmniej jednego modułu.
+- Zakładając zatwierdzony pomysł, wtedy powstaje prywatne repozytorium z README na gałęzi bazowej.
+- Zakładając zajętą nazwę repozytorium, wtedy powstaje repozytorium z pierwszym wolnym przyrostkiem.
+- Zakładając PR ze specyfikacją, wtedy opis PR zawiera werdykt przeglądu i listę założeń, a specyfikacja nie zawiera danych osobowych właściciela.
+- Zakładając werdykt „zatwierdzona” i pozytywny przegląd bezpieczeństwa, wtedy PR jest mergowany bez udziału właściciela.
+- Zakładając werdykt „uwagi” po 2 rundach poprawek, wtedy projekt jest wstrzymywany (S11).
+
+### S5: Architektura i moduły
+1. Architekt wybiera stos (aplikacja uruchamia się w kontenerze na VPS z Dockerem) i dzieli aplikację na co najmniej jeden moduł.
+2. Dla każdego modułu określa kontrakt z dwiema sekcjami: „udostępnia” i „wymaga”.
+3. Dla każdego modułu zapisuje decyzję: część jednej aplikacji albo osobna usługa.
+4. Przygotowuje szkielet i CI.
+5. PR architektury przechodzi automatyczny merge (S8).
+
+**Kryteria akceptacji**
+- Zakładając zmergowaną specyfikację, wtedy powstaje PR architektury z listą modułów, kontraktem każdego modułu i decyzją „część aplikacji / osobna usługa”.
+- Zakładając listę modułów, wtedy każdy scenariusz specyfikacji aplikacji jest przypisany do co najmniej jednego modułu.
+- Zakładając PR architektury, wtedy repozytorium zawiera workflow CI, który uruchamia się na tym PR.
 
 ### S6: Równoległa implementacja modułów
-1. Kierownik zakłada zadania dla modułów.
-2. Do limitu równoległych agentów (konfigurowalny, start: 3) inżynierowie implementują moduły jednocześnie.
-3. Każdy moduł jest testowany względem swojego kontraktu.
+1. Kierownik zakłada zadania dla modułów, których sekcja „wymaga” jest spełniona przez kontrakty (implementacja może opierać się na kontrakcie, a nie na gotowym module).
+2. Do limitu równoległych agentów agenci pracują jednocześnie. Limit obejmuje wszystkie role pracujące naraz nad zadaniami projektu; konfigurowalny, start: 3.
+3. Każdy moduł ma test dla każdej pozycji z sekcji „udostępnia”.
 
 **Kryteria akceptacji**
-- Zakładając limit 3, wtedy naraz pracuje najwyżej 3 agentów implementujących.
+- Zakładając limit 3 i 5 modułów gotowych do pracy, wtedy naraz pracuje najwyżej 3 agentów.
 - Zakładając zmianę limitu w konfiguracji, wtedy nowy limit obowiązuje od następnego przydziału zadań.
-- Zakładając moduł, wtedy jego PR zawiera testy kontraktu.
+- Zakładając PR modułu, wtedy zawiera test dla każdej pozycji z sekcji „udostępnia” jego kontraktu.
 
 ### S7: Integracja
-1. Gdy wszystkie moduły są zmergowane, integrator składa je w całość.
-2. Tester sprawdza pełną aplikację według kryteriów akceptacji specyfikacji.
+1. Gdy wszystkie moduły mają stan „zmergowany”, kierownik zakłada zadanie integracji.
+2. Integrator składa moduły w całość.
+3. Tester uruchamia testy E2E pełnej aplikacji.
 
 **Kryteria akceptacji**
-- Zakładając zmergowane wszystkie moduły, wtedy powstaje zadanie integracji.
-- Zakładając integrację, wtedy testy E2E wszystkich scenariuszy specyfikacji przechodzą przed wydaniem.
+- Zakładając wszystkie moduły „zmergowane”, wtedy powstaje zadanie integracji.
+- Zakładając integrację, wtedy każdy scenariusz specyfikacji aplikacji ma co najmniej jeden test E2E, a wszystkie przechodzą, zanim projekt przejdzie w stan „przegląd”.
 
 ### S8: Automatyczny merge PR
-PR jest mergowany bez człowieka, gdy jednocześnie:
-- reviewer na innym modelu niż autor zatwierdził zmianę,
-- CI jest zielone,
-- przegląd bezpieczeństwa (osobny agent na innym modelu niż autor) przeszedł.
+PR (poza PR ze specyfikacją, S4) jest mergowany bez człowieka, gdy jednocześnie:
+- reviewer na innym modelu zatwierdził zmianę,
+- CI jest zielone (brak workflow CI oznacza niespełniony warunek),
+- przegląd bezpieczeństwa na innym modelu przeszedł.
+
+Każda strona może wymagać najwyżej 3 rund poprawek; potem zadanie ma wyczerpane próby (S11).
 
 **Kryteria akceptacji**
 - Zakładając spełnione trzy warunki, wtedy PR jest mergowany automatycznie.
 - Zakładając niespełniony którykolwiek warunek, wtedy PR nie jest mergowany.
 - Zakładając recenzję lub przegląd bezpieczeństwa wykonane przez ten sam model co autor, wtedy nie liczą się jako zatwierdzenie.
+- Zakładając repozytorium bez workflow CI, wtedy PR nie jest mergowany.
 
-### S9: Przegląd bezpieczeństwa przed wydaniem
-1. Przed wdrożeniem pełna aplikacja przechodzi przegląd bezpieczeństwa.
-2. Przegląd sprawdza: brak funkcji z kategorii wykluczonych, brak sekretów w repozytorium, dostęp tylko po uwierzytelnieniu, przechowywanie wyłącznie danych właściciela.
-3. Znalezione problemy wracają do roju do poprawy.
+### S9: Przegląd bezpieczeństwa przed wdrożeniem
+Pełna aplikacja przechodzi przegląd z czterema punktami:
+1. brak funkcji z kategorii wykluczonych,
+2. brak sekretów w repozytorium,
+3. każdy adres aplikacji wymaga uwierzytelnienia,
+4. jedno konto właściciela: brak rejestracji innych osób i brak formularzy zbierających dane osób trzecich.
+
+Znalezione problemy wracają do roju jako zadania poprawek (S8, S11).
 
 **Kryteria akceptacji**
-- Zakładając aplikację z funkcją z kategorii wykluczonej, wtedy wdrożenie nie następuje.
-- Zakładając pozytywny przegląd, wtedy w repozytorium jest raport z przeglądu z listą sprawdzonych punktów.
+- Zakładając aplikację z funkcją z zestawu wzorcowego kategorii wykluczonych, wtedy wdrożenie nie następuje i powstaje zadanie poprawki.
+- Zakładając sekret w repozytorium, wtedy wdrożenie nie następuje i powstaje zadanie poprawki.
+- Zakładając adres aplikacji dostępny bez uwierzytelnienia, wtedy wdrożenie nie następuje.
+- Zakładając funkcję rejestracji nowych kont, wtedy wdrożenie nie następuje.
+- Zakładając pozytywny przegląd, wtedy w repozytorium jest raport z wynikiem każdego z czterech punktów.
 
 ### S10: Wdrożenie i powiadomienie o gotowości
-1. Aplikacja jest wdrażana na VPS pod prywatnym adresem.
-2. Właściciel dostaje powiadomienie push z adresem i krótkim opisem.
-3. Projekt ma stan „wdrożony”; system wraca do S1.
+1. Po zielonych testach E2E (S7) i pozytywnym przeglądzie (S9) aplikacja jest wdrażana na VPS pod prywatnym adresem.
+2. Właściciel dostaje powiadomienie push z adresem i tytułem aplikacji.
+3. Projekt przechodzi w stan „wdrożony”; generator rusza w następnym cyklu (S1).
 
 **Kryteria akceptacji**
-- Zakładając pozytywny przegląd bezpieczeństwa, wtedy aplikacja jest dostępna pod prywatnym adresem i wymaga uwierzytelnienia.
+- Zakładając wdrożenie, wtedy żądanie bez uwierzytelnienia zwraca odmowę albo przekierowanie do logowania, a zalogowany właściciel widzi aplikację.
+- Zakładając nieudane wdrożenie, wtedy aplikacja nie jest osiągalna bez uwierzytelnienia ani w trakcie, ani po awarii.
 - Zakładając wdrożenie, wtedy właściciel dostaje powiadomienie z adresem.
-- Zakładając wdrożenie, wtedy powstaje nowy pomysł (S1).
+- Zakładając wdrożenie, wtedy w następnym cyklu uruchamia się generator.
 
-### S11: Utknięcie projektu
-1. Zadanie nie przechodzi (testy, CI, recenzja, przegląd bezpieczeństwa albo brak postępu).
-2. System ponawia automatycznie.
-3. Po wyczerpaniu ponowień projekt jest wstrzymywany, a właściciel dostaje powiadomienie z przyczyną.
-4. System generuje nowy pomysł (S1). Wstrzymany projekt zostaje w repozytorium bez dalszej pracy.
+### S11: Wstrzymanie po utknięciu
+1. Zadanie nie przechodzi (błąd, brak postępu, testy, CI, recenzja, przegląd).
+2. System ponawia zadanie albo zleca rundę poprawek bez udziału właściciela.
+3. Po wyczerpaniu prób projekt przechodzi w stan „wstrzymany”, a właściciel dostaje powiadomienie z przyczyną i ostatnim stanem.
+4. Agenci nie podejmują dalszej pracy w tym projekcie; generator rusza w następnym cyklu (S1).
 
 **Kryteria akceptacji**
 - Zakładając nieudane zadanie, wtedy system ponawia je bez udziału właściciela.
-- Zakładając wyczerpane ponowienia, wtedy projekt ma stan „wstrzymany”, a powiadomienie zawiera przyczynę i ostatni etap.
-- Zakładając wstrzymanie, wtedy system nie zadaje właścicielowi pytań i tworzy nowy pomysł (S1) bez akcji właściciela.
-- Zakładając wstrzymany projekt, wtedy agenci nie podejmują w nim dalszej pracy.
+- Zakładając zadanie bez commitu i zmiany stanu przez 3 godziny, wtedy liczy się jako nieudane.
+- Zakładając wyczerpane próby, wtedy projekt ma stan „wstrzymany”, a powiadomienie zawiera przyczynę i ostatni stan.
+- Zakładając wstrzymanie, wtedy właściciel nie dostaje pytań, agenci nie pracują w tym projekcie, a w następnym cyklu uruchamia się generator.
+- Zakładając wstrzymanie przed utworzeniem repozytorium, wtedy powiadomienie zawiera przyczynę, a projekt nie ma repozytorium.
 
 ### S12: Limity czasu i zużycia
-1. Każdy projekt ma limit czasu (domyślnie 7 dni kalendarzowych od zatwierdzenia pomysłu) i limit zużycia; obie wartości w konfiguracji.
-2. Rój nie włącza płatnego dodatkowego zużycia.
-3. Po przekroczeniu limitu projektu projekt jest wstrzymywany z powiadomieniem, a system generuje nowy pomysł (jak w S11).
+1. Każdy projekt ma limit czasu (domyślnie 7 × 24 godziny od zatwierdzenia pomysłu) i limit zużycia; obie wartości w konfiguracji.
+2. Przed każdym przydziałem zadania system sprawdza oba limity projektu.
+3. Po przekroczeniu limitu projektu projekt jest wstrzymywany jak w S11.
+4. Gdy wyczerpie się limit planu modeli, praca jest zawieszana (stan projektu bez zmian, oznaczenie „czeka na limit planu”); system sprawdza dostępność w każdym cyklu i wznawia pracę automatycznie. Zawieszenie nie zużywa ponowień.
+5. System nigdy nie włącza płatnego dodatkowego zużycia.
 
 **Kryteria akceptacji**
-- Zakładając projekt zatwierdzony 7 dni temu i niewdrożony, wtedy projekt ma stan „wstrzymany”, właściciel dostaje powiadomienie z przyczyną „limit czasu”, a powstaje nowy pomysł.
-- Zakładając przekroczony limit zużycia projektu, wtedy projekt ma stan „wstrzymany”, a właściciel dostaje powiadomienie z przyczyną „limit zużycia”.
-- Zakładając wyczerpany limit okna zużycia planu, wtedy praca jest wstrzymywana i wznawiana automatycznie po odnowieniu limitu, bez ponowień, które zużywają limit.
-- Zakładając dowolny stan, wtedy system nie włącza dodatkowego płatnego zużycia.
+- Zakładając projekt zatwierdzony 7 × 24 godziny temu i niewdrożony, wtedy projekt ma stan „wstrzymany”, a powiadomienie ma przyczynę „limit czasu”.
+- Zakładając projekt zatwierdzony 6 dni i 23 godziny temu, wtedy projekt nie jest wstrzymywany z powodu czasu.
+- Zakładając przekroczony limit zużycia projektu, wtedy projekt ma stan „wstrzymany”, a powiadomienie ma przyczynę „limit zużycia”.
+- Zakładając wyczerpany limit planu, wtedy projekt ma oznaczenie „czeka na limit planu”, licznik ponowień się nie zmienia, a po odnowieniu limitu praca wznawia się bez akcji właściciela.
+- Zakładając przydział zadania, wtedy przed nim system sprawdza, że płatne dodatkowe zużycie jest wyłączone; gdy jest włączone, zadanie nie startuje, a dziennik zawiera wpis.
+
+### S13: Pomiar skuteczności
+1. Projekt jest liczony jako „bez interwencji”, gdy osiągnął stan „wdrożony” bez wcześniejszego stanu „wstrzymany”.
+2. Każde powiadomienie o wdrożeniu i wstrzymaniu zawiera bieżący odsetek: projekty „bez interwencji” / wszystkie zatwierdzone pomysły zakończone (wdrożone albo wstrzymane).
+
+**Kryteria akceptacji**
+- Zakładając 3 zakończone projekty, z czego 2 wdrożone bez wstrzymania, wtedy powiadomienie pokazuje 67%.
 
 ## Dane
-- **Pomysł:** tytuł, problem, dla kogo, opis działania, wynik sprawdzenia w sieci ze źródłami, ocena, rekomendacja, stan (nowy, w ocenie, zatwierdzony, odrzucony), powód odrzucenia.
-- **Rozmowa oceny:** wiadomości właściciela i modelu, podsumowanie ustaleń. [DANE OSOBOWE] (treść wypowiedzi właściciela)
-- **Projekt:** pomysł, repozytorium, stan (specyfikacja, architektura, implementacja, integracja, przegląd, wdrożony, wstrzymany), etap, przyczyna wstrzymania, zużycie względem limitu, prywatny adres.
-- **Moduł:** projekt, nazwa, kontrakt, stan, przypisany agent.
-- **Dziennik systemu:** odrzucone pomysły z powodem, ponowienia, wstrzymania, merge.
-- **Konfiguracja:** limit równoległych agentów, limity projektu, liczba ponowień, kategorie wykluczone.
-- **Dane w budowanych aplikacjach:** wyłącznie dane właściciela; mogą obejmować dane zdrowotne lub finansowe właściciela [DANE OSOBOWE, w tym szczególnej kategorii].
+- **Pomysł:** tytuł, problem, dla kogo, opis działania, wynik sprawdzenia w sieci ze źródłami, oceny 1–5 w trzech kryteriach, rekomendacja z uzasadnieniem, stan, powód odrzucenia [DANE OSOBOWE].
+  - Stany: „w ocenie” → „zatwierdzony” albo „odrzucony”.
+- **Rozmowa oceny:** wiadomości właściciela i modelu, podsumowanie ustaleń. [DANE OSOBOWE; przy pomysłach zdrowotnych lub finansowych także szczególnej kategorii]
+- **Projekt:** pomysł, repozytorium, data zatwierdzenia, stan, oznaczenie „czeka na limit planu”, przyczyna wstrzymania, zużycie względem limitu, prywatny adres, „bez interwencji” (tak/nie).
+  - Stany: „specyfikacja” → „architektura” → „implementacja” → „integracja” → „przegląd” → „wdrażanie” → „wdrożony”; z każdego stanu przed „wdrożony” możliwe przejście do „wstrzymany”.
+- **Moduł:** projekt, nazwa, kontrakt („udostępnia”, „wymaga”), decyzja „część aplikacji / osobna usługa”, stan („do zrobienia”, „w pracy”, „zmergowany”).
+- **Zadanie:** projekt, moduł (opcjonalnie), rola, stan, liczba ponowień, liczba rund poprawek, czas ostatniego postępu.
+- **Raport z przeglądu bezpieczeństwa:** projekt, wynik każdego punktu S9, data.
+- **Powiadomienie:** rodzaj (pomysł, wdrożenie, wstrzymanie, brak pomysłów), tytuł, link. Bez treści zdrowotnych ani finansowych.
+- **Dziennik systemu:** odrzucone próby z przyczyną, ponowienia, wstrzymania, merge. Bez danych osobowych.
+- **Konfiguracja:** interwał cyklu, limit równoległych agentów, limit czasu i zużycia projektu, liczba ponowień, liczba rund poprawek, liczba prób generowania, zestaw kategorii wykluczonych z przykładami.
+- **Subskrypcja powiadomień:** urządzenie właściciela. [DANE OSOBOWE]
+- **Dane w budowanych aplikacjach:** wyłącznie dane właściciela; mogą obejmować dane zdrowotne lub finansowe [DANE OSOBOWE, w tym szczególnej kategorii]. Dane uwierzytelnienia właściciela [DANE OSOBOWE].
 
 ## Integracje zewnętrzne
 Wymagania właściciela (istniejąca infrastruktura):
-- **Claude Max** jako jedyne źródło modeli (bez Codex i innych dostawców).
+- **Claude Max** jako jedyne źródło modeli (bez innych dostawców).
 - **Cezar (Open Mercato)** na VPS jako orkiestrator agentów.
-- **cezar-pwa** jako aplikacja na telefon: powiadomienia push i rozmowa oceny pomysłu.
+- **cezar-pwa** jako aplikacja na telefon. Powiadomienia push już działają; rozmowa oceny z przyciskami „Zatwierdź” i „Odrzuć” to nowa funkcja tej aplikacji.
 - **GitHub, konto `cieyhomelab`:** repozytoria, PR, CI, zadania; agenci działają na koncie właściciela.
 - **Wyszukiwanie w sieci** dla generatora pomysłów.
-- **VPS właściciela z Dockerem** jako miejsce wdrożenia aplikacji.
+- **VPS właściciela z Dockerem** jako miejsce wdrożenia aplikacji; aplikacje uruchamiają się w kontenerach.
+- **Inny model przy recenzji i przeglądzie bezpieczeństwa** (wymaganie właściciela przeniesione z sh-skills).
 
 ## Wymagania niefunkcjonalne
 
 ### Bezpieczeństwo
-- **Kategorie wykluczone (pomysł i funkcje aplikacji):** wyliczanie lub sugerowanie dawek leków, diagnoza medyczna, porady inwestycyjne, obsługa prawdziwych pieniędzy (płatności, przelewy, handel). Także pomysły nielegalne, wprowadzające w błąd lub skierowane przeciw konkretnym osobom.
-- Każda aplikacja dostępna wyłącznie po uwierzytelnieniu właściciela, pod prywatnym adresem; brak publicznego wydania.
-- Brak sekretów w repozytoriach; sekrety tylko na VPS.
-- Przegląd bezpieczeństwa przed każdym merge (S8) i przed wydaniem (S9).
+- **Kategorie wykluczone (pomysł i funkcje aplikacji):** wyliczanie lub sugerowanie dawek leków, diagnoza medyczna, porady inwestycyjne, obsługa prawdziwych pieniędzy (płatności, przelewy, handel). Także pomysły nielegalne, wprowadzające w błąd albo skierowane przeciw konkretnym osobom. Konfiguracja zawiera zestaw wzorcowy przykładów dozwolonych i wykluczonych, używany w testach.
+- Każda aplikacja dostępna wyłącznie po uwierzytelnieniu właściciela; brak publicznego wydania.
+- Sekrety poza repozytoriami.
+- Przegląd bezpieczeństwa przed każdym merge (S4, S8) i przed wdrożeniem (S9).
 
 ### RODO
 - Aplikacje przechowują wyłącznie dane właściciela i nie zbierają danych od innych osób.
-- Dane zdrowotne i finansowe właściciela są danymi wrażliwymi: dostęp tylko po uwierzytelnieniu, bez wysyłania do usług zewnętrznych poza niezbędnymi do działania.
+- Specyfikacje, repozytoria i dziennik nie zawierają danych osobowych właściciela; podsumowanie rozmowy trafia do specyfikacji jako wymagania, bez danych osobowych.
+- Agenci i testy używają danych syntetycznych, nigdy danych właściciela.
+- Powiadomienia zawierają tylko tytuł i link.
+- Dane zdrowotne i finansowe właściciela: dostęp tylko po uwierzytelnieniu, bez wysyłania do usług zewnętrznych poza niezbędnymi do działania.
 
-### Skala i zasoby
-- Jeden projekt naraz.
-- Równoległość ograniczona konfigurowalnym limitem agentów (start: 3), ze względu na wspólne limity planu Claude Max (okno 5-godzinne, limit tygodniowy, pula dzielona z czatem właściciela) i zasoby VPS.
+### Skala, zasoby i niezawodność
+- Jeden aktywny projekt naraz (od etapu 2).
+- Równoległość ograniczona konfigurowalnym limitem agentów (start: 3), bo wszyscy agenci i czat właściciela dzielą limity jednego planu Claude Max, a zadania dzielą zasoby VPS.
+- Stan systemu jest trwały: po restarcie orkiestratora praca wznawia się od ostatniego zapisanego stanu.
 
 ### Języki
 - Komunikacja z właścicielem, karty pomysłów i specyfikacje po polsku.
 
 ## Przypadki brzegowe i błędy
-- **Brak pomysłu spełniającego kryteria:** po 5 nieudanych próbach w jednym cyklu generator przerywa cykl i próbuje w następnym, bez powiadomienia.
-- **Właściciel nie odpowiada na pomysł:** pomysł czeka w stanie „w ocenie”; nowy pomysł nie powstaje.
-- **Brak uprawnień do utworzenia repozytorium lub push:** projekt wstrzymany z powiadomieniem i przyczyną (S11).
-- **Brak dostępu do sieci przy sprawdzaniu pomysłu:** pomysł nie trafia do właściciela bez sprawdzenia; ponowienie w następnym cyklu.
-- **Konflikt modułów przy integracji:** wraca jako zadanie do roju; po wyczerpaniu ponowień S11.
-- **Niedostępny VPS lub wdrożenie nieudane:** ponowienia, potem S11.
+- **Brak pomysłów przez dłuższy czas:** po 24 kolejnych cyklach bez udanej próby właściciel dostaje jedno powiadomienie „brak pomysłów”; generator próbuje dalej.
+- **Właściciel nie odpowiada na pomysł:** pomysł zostaje „w ocenie”; nowy pomysł nie powstaje.
+- **Powiadomienie niedostarczone albo cezar-pwa niedostępna:** pomysł zostaje „w ocenie”; karta jest widoczna po otwarciu aplikacji.
+- **Wyczerpany limit planu podczas rozmowy oceny:** aplikacja pokazuje komunikat, że rozmowa będzie dostępna po odnowieniu limitu; pomysł zostaje „w ocenie”.
+- **Brak uprawnień do utworzenia repozytorium lub push:** S11.
+- **Brak dostępu do sieci przy sprawdzaniu pomysłu:** próba nieudana (brak źródła); ponowienie w następnym cyklu.
+- **Awaria lub limit zapytań GitHuba:** zadanie nieudane, ponowienia, potem S11.
+- **Konflikt modułów przy integracji:** runda poprawek; po wyczerpaniu S11.
+- **Brak zasobów VPS na kolejne wdrożenie albo nieudane wdrożenie:** ponowienia, potem S11.
 - **Wyczerpany limit planu:** S12.
 
 ## Poza zakresem
-- Publiczne wydanie aplikacji, użytkownicy inni niż właściciel, zbieranie danych od innych osób.
+- Publiczne wydanie aplikacji, użytkownicy inni niż właściciel (także domownicy), zbieranie danych od innych osób.
 - Komercjalizacja i płatności.
 - Pomysły i funkcje z kategorii wykluczonych.
 - Dowolny dostawca modeli inny niż Claude Max; płatne dodatkowe zużycie.
-- Kilka projektów jednocześnie.
-- Obowiązkowa architektura mikroserwisów (forma modułów to decyzja architekta dla każdej aplikacji).
-- Utrzymanie i rozwój aplikacji po wdrożeniu.
+- Kilka aktywnych projektów jednocześnie.
+- Obowiązkowa architektura mikroserwisów (forma modułów to decyzja architekta).
+- Utrzymanie, rozwój i wznawianie aplikacji po wdrożeniu albo wstrzymaniu.
+- Usuwanie i retencja rozmów oraz dziennika.
 
 ## Etapy dostarczenia
-1. **Pomysł i ocena:** generator pomysłów, karta pomysłu, powiadomienie, rozmowa oceny w cezar-pwa, zatwierdzenie i odrzucenie, specyfikacja z niezależnym przeglądem i automatycznym merge. Dalsza budowa na dotychczasowym łańcuchu ról. Scenariusze: S1, S2, S3, S4.
-2. **Autonomiczne dostarczanie:** samodzielne tworzenie repozytorium, automatyczny merge, przegląd bezpieczeństwa, wdrożenie na VPS, powiadomienia o gotowości i wstrzymaniu, limity. Scenariusze: S8, S9, S10, S11, S12.
-3. **Praca równoległa modułami:** podział na moduły z kontraktami, równoległa implementacja do limitu agentów, integracja. Scenariusze: S5, S6, S7.
+1. **Pomysł, ocena i specyfikacja:** generator, karta, powiadomienie, rozmowa oceny w cezar-pwa, zatwierdzenie i odrzucenie, repozytorium i specyfikacja z automatycznym merge. Projekt kończy się na zmergowanej specyfikacji i powiadomieniu „specyfikacja gotowa”; dalsza budowa idzie dotychczasowym łańcuchem sh-* z bramkami ludzkimi. Generator rusza w następnym cyklu po zmergowaniu specyfikacji. Scenariusze: S1, S2, S3, S4.
+2. **Autonomiczne dostarczanie jednym modułem:** architektura z jednym modułem, szkielet i CI, automatyczny merge, testy E2E, przegląd bezpieczeństwa, wdrożenie, wstrzymania, limity i pomiar skuteczności. Od tego etapu obowiązuje jeden aktywny projekt aż do wdrożenia albo wstrzymania. Scenariusze: S5 (jeden moduł), S7 (testy E2E pełnej aplikacji), S8, S9, S10, S11, S12, S13.
+3. **Praca równoległa modułami:** wiele modułów z kontraktami, równoległa implementacja do limitu agentów, integracja. Scenariusze: S5 (wiele modułów), S6, S7 (integracja).
 
 ## Założenia
-- **Migracja:** `swarm-of-agents` przejmuje skille i workflowy z sh-skills i konfigurację z sh-control; stare repozytoria są archiwizowane po uruchomieniu etapu 1. Uzasadnienie: decyzja właściciela (R4.5), jedno źródło prawdy.
-- **Ponowienia:** domyślnie 2 automatyczne ponowienia na zadanie, wartość w konfiguracji. Uzasadnienie: najprostsze i łatwe do zmiany.
-- **Próg sukcesu:** nie ustalono wartości docelowej; system raportuje odsetek. Uzasadnienie: najpierw trzeba poznać wartość bazową.
-- **Repozytoria prywatne:** każda nowa aplikacja w prywatnym repozytorium. Uzasadnienie: aplikacje są prywatnymi prototypami.
-
-- **Próby generowania:** najwyżej 5 prób znalezienia pomysłu spełniającego kryteria w jednym cyklu, wartość w konfiguracji. Uzasadnienie: ogranicza zużycie limitu na nieudane próby.
+- **Migracja:** `swarm-of-agents` przejmuje skille i workflowy z sh-skills oraz konfigurację z sh-control; stare repozytoria są archiwizowane po uruchomieniu etapu 1. Analityk potrzebuje wariantu autonomicznego. Uzasadnienie: decyzja właściciela, jedno źródło prawdy; migracja to osobne zadanie, nie scenariusz systemu.
+- **Etap 1 kończy się na specyfikacji:** generator rusza po zmergowaniu specyfikacji, bo w etapie 1 nie ma jeszcze stanów „wdrożony” i „wstrzymany”. Uzasadnienie: etap 1 działa samodzielnie; zasada jednego projektu obowiązuje od etapu 2.
+- **Ponowienia i rundy:** 2 ponowienia na zadanie, 3 rundy poprawek na PR, 2 rundy poprawek specyfikacji; wartości w konfiguracji. Uzasadnienie: najprostsze i łatwe do zmiany.
+- **Brak postępu = 3 godziny:** ten sam próg co dotychczasowy próg utknięcia PR w sh-kierownik.
+- **Cykl co godzinę:** zgodnie z dotychczasowym rytmem przeglądu; wartość w konfiguracji.
+- **5 prób generowania w cyklu i powiadomienie po 24 cyklach bez pomysłu:** ogranicza zużycie limitu i chroni przed bezterminową ciszą.
+- **Limit 3 agentów i 7 dni na projekt:** wartości startowe zaakceptowane przez właściciela; do korekty po pierwszych projektach.
+- **Limit zużycia projektu:** jednostkę i sposób pomiaru ustala architekt; wymaganie to mierzalność przed każdym przydziałem zadania.
+- **Próg sukcesu:** bez wartości docelowej; system raportuje odsetek, bo najpierw trzeba poznać wartość bazową.
+- **Repozytoria prywatne:** aplikacje są prywatnymi prototypami.
 
 ## Sekcje techniczne
 > Uzupełnia architekt po zatwierdzeniu specyfikacji: architektura, model danych, kontrakty API, plan implementacji.
