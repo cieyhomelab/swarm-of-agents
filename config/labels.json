@@ -1,0 +1,21 @@
+{
+  "color": "5319E7",
+  "system": [
+    "sw-pomysl",
+    "sw-w-ocenie",
+    "sw-zatwierdzony",
+    "sw-odrzucony",
+    "sw-spec-gotowa",
+    "sw-stan-specyfikacja",
+    "sw-stan-architektura",
+    "sw-stan-implementacja",
+    "sw-stan-integracja",
+    "sw-stan-przeglad",
+    "sw-stan-wdrazanie",
+    "sw-stan-wdrozony",
+    "sw-stan-wstrzymany",
+    "sw-czeka-na-limit",
+    "sw-bez-interwencji",
+    "sw-dziennik"
+  ]
+}
