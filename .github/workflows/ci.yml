@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q bats shellcheck jq python3-yaml
+      - name: Lint
+        run: scripts/lint.sh
+      - name: Unit tests
+        run: scripts/test-unit.sh
+      - name: Integration tests
+        run: scripts/test-integration.sh
+      - name: Build
+        run: scripts/build.sh
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: E2E
+        run: scripts/test-e2e.sh
+      - name: Two parallel E2E runs leave nothing behind
+        run: |
+          E2E_RUN_ID=ci-a scripts/test-e2e.sh > a.log 2>&1 & a=$!
+          E2E_RUN_ID=ci-b scripts/test-e2e.sh > b.log 2>&1 & b=$!
+          status=0
+          wait "$a" || status=1
+          wait "$b" || status=1
+          cat a.log b.log
+          left="$(docker ps -a --format '{{.Names}}' | grep '^e2e-' || true)
+          $(docker network ls --format '{{.Name}}' | grep '^e2e-' || true)
+          $(docker volume ls --format '{{.Name}}' | grep '^e2e-' || true)"
+          if [ -n "$(echo "$left" | tr -d '[:space:]')" ]; then
+            echo "leftover e2e resources:"; echo "$left"; status=1
+          fi
+          exit "$status"
