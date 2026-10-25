@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# sw-doctor — health check of the swarm-of-agents runtime on the VPS.
+#
+# Checks the prerequisites every sweep needs and prints one status line:
+#   STAN: OK
+#   STAN: BLAD <reason>; <reason>...
+# Exit code 0 when healthy, 1 otherwise. Read-only: changes nothing.
+set -uo pipefail
+
+# shellcheck source=bin/lib/common.sh
+. "$(dirname "$0")/lib/common.sh"
+
+problems=()
+
+for cmd in gh jq curl; do
+  command -v "$cmd" >/dev/null 2>&1 || problems+=("brak polecenia $cmd")
+done
+
+if [ ! -r "$SW_CONFIG" ]; then
+  problems+=("brak konfiguracji $SW_CONFIG")
+elif ! jq -e 'type == "object"' "$SW_CONFIG" >/dev/null 2>&1; then
+  problems+=("niepoprawna konfiguracja $SW_CONFIG")
+fi
+
+# Paid API billing must never be used: Claude runs on the Max plan only.
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  problems+=("ustawiony ANTHROPIC_API_KEY (rozliczenie API zabronione)")
+fi
+
+if command -v gh >/dev/null 2>&1; then
+  gh api user --jq .login >/dev/null 2>&1 || problems+=("gh nie jest zalogowany")
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsS --max-time 10 "$SW_CEZAR_URL/health" >/dev/null 2>&1 \
+    || problems+=("Cezar niedostepny pod $SW_CEZAR_URL")
+fi
+
+if [ "${#problems[@]}" -eq 0 ]; then
+  echo "STAN: OK"
+  exit 0
+fi
+
+reasons=$(printf '%s; ' "${problems[@]}")
+echo "STAN: BLAD ${reasons%; }"
+exit 1

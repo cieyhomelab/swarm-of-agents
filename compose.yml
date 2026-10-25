@@ -1,0 +1,26 @@
+# Test environment for scripts/test-e2e.sh. Production runs on Cezar on the VPS;
+# this Compose file only provides mocks of the external APIs and a runner with
+# the same tools the VPS has. No host ports are published.
+services:
+  mock:
+    build:
+      context: .
+      dockerfile: tests/e2e/mock.Dockerfile
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  runner:
+    build:
+      context: .
+      dockerfile: tests/e2e/runner.Dockerfile
+    depends_on:
+      mock:
+        condition: service_healthy
+    environment:
+      SW_CEZAR_URL: http://mock:8080
+      FAKE_GH_API_URL: http://mock:8080
+      MOCK_URL: http://mock:8080
+    working_dir: /work

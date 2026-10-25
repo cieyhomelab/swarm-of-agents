@@ -1,0 +1,24 @@
+{
+  "cycleHours": 1,
+  "maxParallelAgents": 3,
+  "projectTimeLimitHours": 168,
+  "projectUsageLimitUsd": 150,
+  "retriesPerTask": 2,
+  "fixRoundsPerPr": 3,
+  "specFixRounds": 2,
+  "ideaAttemptsPerCycle": 5,
+  "noIdeaNotifyAfterCycles": 24,
+  "stalledAfterHours": 3,
+  "githubOwner": "cieyhomelab",
+  "controlRepo": "cieyhomelab/sw-control",
+  "models": {
+    "generator": "opus",
+    "analyst": "opus",
+    "architect": "opus",
+    "engineer": "opus",
+    "integrator": "opus",
+    "reviewer": "sonnet",
+    "security": "sonnet",
+    "chores": "haiku"
+  }
+}
