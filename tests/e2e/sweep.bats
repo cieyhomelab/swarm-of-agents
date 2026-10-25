@@ -42,6 +42,26 @@ gate_command() {
   [[ "$output" == *"URUCHOM: OCENA 3"* ]]
 }
 
+@test "sweep gate takes no action in a project on the sh-* chain" {
+  curl -fsS -X POST "$MOCK_URL/__control" -d '{
+    "issues": [{"number": 5, "state": "open", "body": "<!-- sw:meta {\"repo\":\"cieyhomelab/app\"} -->",
+                "labels": [{"name": "sw-pomysl"}, {"name": "sw-stan-specyfikacja"}]}],
+    "repo_files": ["cieyhomelab/app/.ai/cezar/workflows/sh-delivery.yml"]}' >/dev/null
+  run bash -c "$(gate_command)"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"OCENA"* ]]
+  [[ "$output" == *"URUCHOM: GENERATOR"* ]]
+}
+
+@test "sweep gate does not generate while a project is active" {
+  curl -fsS -X POST "$MOCK_URL/__control" -d '{
+    "issues": [{"number": 5, "state": "open", "body": "<!-- sw:meta {\"repo\":\"cieyhomelab/app\"} -->",
+                "labels": [{"name": "sw-pomysl"}, {"name": "sw-stan-specyfikacja"}]}]}' >/dev/null
+  run bash -c "$(gate_command)"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"GENERATOR"* ]]
+}
+
 @test "sweep gate yields to another running sweep" {
   curl -fsS -X POST "$MOCK_URL/__control" -d '{"runs": [{"id": "x", "workflow": "sw-sweep", "status": "running"}]}' >/dev/null
   run bash -c "$(gate_command)"
