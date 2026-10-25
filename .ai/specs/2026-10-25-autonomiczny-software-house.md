@@ -336,24 +336,25 @@ Decyzja o stosie i jej uzasadnienie: `docs/adr/0001-stos-technologiczny.md`. Zas
 | Cezar | VPS, `127.0.0.1:4322` | Silnik: zadania, workflowy w wersji 2, automatyzacje, wznawianie po limicie planu, rejestracja projektów. Nie jest modyfikowany. |
 | cezar-pwa + sidecar `cezar-push` | VPS (`/m/`, `127.0.0.1:4330`) | Rozmowa oceny (`RunScreen`, `AskCard`) i powiadomienia push. Etap 1 bez zmian; etap 2 dodaje nowe rodzaje bramek (zmiana w repozytorium cezar-pwa). |
 | `swarm-of-agents` (to repozytorium) | klon w `~/swarm-of-agents` | Kod roju: `skills/sw-*`, `workflows/sw-*.yml`, `bin/sw-*`, `config/`. Skille linkowane do `~/.claude/skills` przez `scripts/install.sh`. |
-| `sw-control` | prywatne repozytorium GitHub + projekt Cezara | Repozytorium sterujące: issues pomysłów i dziennik (stan), automatyzacja `sw: przegląd co godzinę`, kopie workflowów `sw-sweep` i `sw-ocena` w `.ai/cezar/workflows/`. |
+| `sw-control` | **prywatne** repozytorium GitHub + projekt Cezara | Repozytorium sterujące: issues pomysłów i dziennik (stan), automatyzacja `sw: przegląd co godzinę`, kopie workflowów `sw-sweep` i `sw-ocena` w `.ai/cezar/workflows/`. `sw-doctor` blokuje pracę, gdy repozytorium nie jest prywatne. |
 | Projekt aplikacji | prywatne repozytorium GitHub + projekt Cezara | Utworzony przez `POST /api/v1/projects/create`. Zawiera specyfikację aplikacji, kod i kopie workflowów `sw-*` potrzebnych do budowy. |
 | GitHub `cieyhomelab` | – | Trwały stan (etykiety, komentarze, issues, PR), CI aplikacji. Agenci działają na koncie właściciela. |
 
 Granice:
-- Logika deterministyczna (decyzje bramki, zmiany stanu, merge, tworzenie repozytoriów, powiadomienia) jest w skryptach `bin/sw-*` wywoływanych przez węzły `check`.
-- Agenci (węzły `agent`) tylko piszą treść: pomysły, rozmowę, specyfikacje, kod, recenzje.
-- Jedyne zapisy agentów do stanu to etykiety decyzji i komentarze opisane w kontraktach poniżej; skrypt po agencie sprawdza ich poprawność.
+- **Skrypty `bin/sw-*` (węzły `check`):** cała logika deterministyczna, czyli decyzje bramki, zmiany stanu (także etykieta decyzji pomysłu), merge, tworzenie repozytoriów i powiadomienia.
+- **Agenci (węzły `agent`, zawsze `runner: claude`, jawny `model`, ograniczone `allowedTools` i `bashAllowlist`):** wyłącznie treść, czyli pomysły, rozmowa, specyfikacje, kod, recenzje i werdykty `CEZ:VERDICT`.
+- **Zapisy agentów na GitHubie:** tylko komentarze opisane w modelu danych oraz commity i PR w repozytorium aplikacji.
+- **Werdykty:** trafiają do skryptów jako wyjścia węzłów (`{{nodes.<id>.verdict}}`), nigdy z treści komentarzy.
 
 #### Skille (`skills/sw-*`)
 | Skill | Model (`config/sw.json`) | Etap | Zadanie |
 |-------|--------------------------|------|---------|
-| `sw-start` | `chores` | 1 | Jednorazowa konfiguracja `sw-control`: etykiety `sw-*`, workflowy, automatyzacja „sw: przegląd co godzinę” (aktualizacja po nazwie przez `list`, tylko nazwy `sw: …`), issue dziennika. |
-| `sw-generator` | `generator` | 1 | S1: pomysł, sprawdzenie w sieci, karta pomysłu w issue. |
-| `sw-analityk` | `analyst` | 1 | Tryb `ocena` (S2/S3, rozmowa i decyzja) i tryb `spec` (S4, specyfikacja aplikacji bez dopytywania). |
+| `sw-start` | `chores` | 1 | Jednorazowa konfiguracja `sw-control`: utworzenie jako prywatne (jeśli brak), etykiety `sw-*`, workflowy, automatyzacja „sw: przegląd co godzinę” (aktualizacja po nazwie przez `list`, tylko nazwy `sw: …`; `delete` niedozwolone w `bashAllowlist`), issue dziennika. |
+| `sw-generator` | `generator` | 1 | S1: pomysł, sprawdzenie w sieci, odrzucanie duplikatów i kategorii wykluczonych, karta pomysłu w issue. |
+| `sw-analityk` | `analyst` | 1 | Tryb `ocena` (S2/S3: rozmowa, podsumowanie, karta decyzji) i tryb `spec` (S4: specyfikacja aplikacji bez dopytywania, luki w „Założeniach”). |
 | `sw-recenzent` | `reviewer` | 1 | Niezależny przegląd specyfikacji (S4) i recenzja PR (S8); werdykty `zatwierdzona`/`uwagi` oraz `approve`/`changes`. |
-| `sw-bezpieczenstwo` | `security` | 1 | Przegląd bezpieczeństwa PR (S4, S8) i aplikacji (S9) według `config/kategorie-wykluczone.md`; werdykty `pass`/`fail`. |
-| `sw-architekt` | `architect` | 2 | S5: stos, moduły z kontraktami, szkielet i CI aplikacji. |
+| `sw-bezpieczenstwo` | `security` | 1 | Przegląd bezpieczeństwa PR (S4, S8) i aplikacji (S9): kategorie wykluczone według `config/kategorie-wykluczone.md`, brak danych osobowych (także w komentarzu `sw:ustalenia`), sekrety, uwierzytelnienie; werdykty `pass`/`fail`. |
+| `sw-architekt` | `architect` | 2 | S5: stos, moduły z kontraktami, szkielet i CI aplikacji z check-runami `requiredChecks`. |
 | `sw-kierownik` | `chores` | 2 | Zadania modułów, przydział do limitu, wykrywanie utknięcia (S6, S11). |
 | `sw-inzynier` | `engineer` | 2 | Implementacja modułu według kontraktu (S6). |
 | `sw-tester` | `reviewer` | 2 | Testy E2E pełnej aplikacji (S7). |
@@ -362,26 +363,31 @@ Granice:
 #### Skrypty (`bin/sw-*`)
 | Skrypt | Etap | Zadanie |
 |--------|------|---------|
-| `sw-doctor` | szkielet | Zdrowie środowiska (narzędzia, `gh`, Cezar, brak `ANTHROPIC_API_KEY`). |
-| `sw-gate` | szkielet → 1 | Decyzja cyklu: `URUCHOM: NIC`, `GENERATOR`, `OCENA <issue>`, `SPEC <issue>`, później `PROJEKT <issue>`. |
+| `sw-doctor` | szkielet | Zdrowie środowiska: narzędzia, `gh`, Cezar (`/api/v1/health`), prywatne `sw-control`, brak zmiennych rozliczanych poza planem Max; ostrzeżenie o `resources.maxParallel`. |
+| `sw-gate` | szkielet → 1 | Decyzja cyklu: `URUCHOM: NIC`, `GENERATOR`, `OCENA <issue>`, `SPEC <issue>`, później `PROJEKT <issue>`. Zwraca `NIC`, gdy w `sw-control` trwa inne zadanie `sw-sweep`. |
 | `sw-log` | 1 | Wpis w issue dziennika (bez danych osobowych). |
 | `sw-start-ocena` | 1 | Tworzy nieautonomiczne zadanie `sw-ocena` dla issue pomysłu. |
-| `sw-ocena-wynik` | 1 | Sprawdza, że issue ma dokładnie jedną etykietę decyzji; stosuje przejścia stanu. |
-| `sw-create-repo` | 1 | Repozytorium aplikacji przez Cezara, nazwa z przyrostkiem, zasiew plików, `maxParallel`. |
-| `sw-merge` | 1 | Merge PR po spełnieniu warunków (S4/S8), z ponownym sprawdzeniem etykiet i CI. |
+| `sw-ocena-wynik` | 1 | Czyta historię zadania oceny z Cezara, ustawia etykietę decyzji na podstawie wiadomości właściciela, sprawdza komentarze agenta. |
+| `sw-create-repo` | 1 | Repozytorium aplikacji przez Cezara (z adopcją repozytorium utworzonego w przerwanym przebiegu), zasiew plików, `maxParallel`. |
+| `sw-pr-body` | 1 | Dopisuje do opisu PR werdykty przeglądów i listę założeń (S4). |
+| `sw-merge` | 1 | Merge PR po spełnieniu warunków (S4/S8): werdykty z argumentów, modele z rekordów zadań, SHA, nazwane check-runy. |
 | `sw-notify` | 1 | Powiadomienie przez bramkę `cezar-push` (tylko tytuł i link). |
-| `sw-handover-sh` | 1 | Wyjątek etapu 1: przekazanie projektu łańcuchowi sh-*. |
-| `sw-limits` | 2 | Limit czasu i zużycia projektu, płatne zużycie (S12). |
+| `sw-handover-sh` | 1 | Wyjątek etapu 1: przekazanie projektu łańcuchowi sh-*. Jedyny plik, któremu `check-names.sh` pozwala odwoływać się do `sh-*`. |
+| `sw-limits` | 2 | Limit czasu i zużycia projektu, wyczerpanie wznowień Cezara (S12). |
 | `sw-pause` | 2 | Wstrzymanie projektu z przyczyną (S11, S12). |
 | `sw-deploy` | 2 | Wdrożenie aplikacji na VPS i sprawdzenie dostępu (S10). |
 
 #### Przepływy
 1. **Cykl (S1).**
    - Automatyzacja `sw: przegląd co godzinę` (`schedule`, `hours: 1`, autonomiczna) uruchamia `sw-sweep` w `sw-control`.
-   - Węzeł `check` `sw-gate` czyta stan z GitHuba i drukuje jedną decyzję. Gałęzie `if` (`contains`) wybierają dalszy krok.
-   - Przy `URUCHOM: GENERATOR`: węzeł `agent` `sw-generator` w pętli `loop` (`max` = `ideaAttemptsPerCycle`). Agent kończy werdyktem `karta` albo `nieudana`; przy `nieudana` skrypt `sw-log` zapisuje przyczynę.
-   - Po karcie `sw-start-ocena` tworzy zadanie oceny.
-   - Po wyczerpaniu prób licznik cykli bez pomysłu rośnie. Po `noIdeaNotifyAfterCycles` przychodzi jedno powiadomienie.
+   - Węzeł `check` `sw-gate` czyta stan z GitHuba i Cezara i drukuje jedną decyzję. Gałęzie `if` (`contains`) wybierają dalszy krok.
+   - **Bez powiadomień o porażce.** `sw-sweep` i pozostałe zadania autonomiczne kończą się statusem `success` także przy porażce. Sidecar powiadamia o każdym zadaniu, które wchodzi w `failed`, a specyfikacja nie przewiduje takich wiadomości. Ponowienia i rundy poprawek to pętle `loop` w jednym zadaniu, a nie kolejne nieudane zadania.
+   - **Porażki środowiska:** linia `STAN: BLAD` trafia do dziennika. Po `noIdeaNotifyAfterCycles` kolejnych takich cyklach przychodzi jedno powiadomienie `blocked`.
+   - **Przy `URUCHOM: GENERATOR`:**
+     - `sw-gate` zapisuje w worktree zadania plik `.ai/sw-run/generator.json`: tytuły i problemy odrzuconych pomysłów oraz zredagowane wskazówki z odrzuceń;
+     - węzeł `agent` `sw-generator` w pętli `loop` (`max` = `ideaAttemptsPerCycle`) kończy werdyktem `karta` albo `nieudana`; przy `nieudana` skrypt `sw-log` zapisuje przyczynę;
+     - po karcie `sw-start-ocena` tworzy zadanie oceny;
+     - po wyczerpaniu prób licznik cykli bez pomysłu rośnie. Po `noIdeaNotifyAfterCycles` przychodzi jedno powiadomienie.
 2. **Ocena (S2, S3).**
    - `sw-start-ocena` wywołuje `POST /api/v1/p/{sw-control}/runs` z `workflow: sw-ocena`, `autonomous: false`, a zadaniem jest numer issue.
    - Agent `sw-analityk` (tryb `ocena`):
@@ -390,37 +396,40 @@ Granice:
      - pokazuje podsumowanie i kończy turę pytaniem `CEZ:ASK` z opcjami „Zatwierdź” i „Odrzuć”.
 
      Zadanie w stanie `waiting` uruchamia powiadomienie `attention` sidecara, które otwiera `RunScreen`.
-   - Po odpowiedzi agent:
-     - zapisuje komentarz z podsumowaniem jako wymagania bez danych osobowych (przy zatwierdzeniu) albo powód odrzucenia;
-     - ustawia etykietę decyzji;
-     - kończy `CEZ:DONE`.
-   - Węzeł `check` `sw-ocena-wynik` sprawdza spójność.
-   - Zaginione zadanie (restart Cezara) wykrywa `sw-gate`: issue jest `sw-w-ocenie`, a zadanie z metadanych nie jest `waiting`, `running` ani `queued`. Bramka zwraca wtedy `URUCHOM: OCENA <issue>`.
+   - Po odpowiedzi agent zapisuje komentarz `sw:ustalenia` (wymagania bez danych osobowych) albo `sw:odrzucenie` (zredagowana wskazówka bez danych osobowych) i kończy `CEZ:DONE`.
+   - Węzeł `check` `sw-ocena-wynik`:
+     - czyta historię zadania (`GET …/runs/{id}/history`) i szuka ostatniej wiadomości użytkownika w formacie „Decyzja: Zatwierdź” albo „Decyzja: Odrzuć”;
+     - dopiero na tej podstawie ustawia etykietę;
+     - gdy brak decyzji albo komentarza, zostawia `sw-w-ocenie` i zapisuje wpis w dzienniku.
+
+     Agent nie ustawia etykiet, a treść z sieci w rozmowie nie może zatwierdzić pomysłu.
+   - **Zaginione zadanie** (np. po restarcie Cezara) wykrywa `sw-gate`: issue ma etykietę `sw-w-ocenie`, a zadanie z metadanych nie jest w stanie `waiting`, `running` ani `queued`. Bramka zwraca wtedy `URUCHOM: OCENA <issue>`.
 3. **Specyfikacja (S4).**
    - `sw-gate` widzi `sw-zatwierdzony` bez repozytorium i zwraca `URUCHOM: SPEC <issue>`.
    - `sw-create-repo` tworzy repozytorium i projekt, a potem uruchamia w nowym projekcie autonomiczne zadanie `sw-spec`. Kroki `sw-spec`:
      1. agent `sw-analityk` (tryb `spec`), `git.commit`, `git.push`, `github.draft-pr`;
      2. `loop` (`max` = `specFixRounds`) z agentem `sw-recenzent` (werdykty `zatwierdzona`/`uwagi`) i poprawką analityka;
      3. agent `sw-bezpieczenstwo` (`pass`/`fail`);
-     4. `check` `sw-merge`;
-     5. `check` `sw-notify spec`;
-     6. `check` `sw-handover-sh` (etap 1) albo przejście do `sw-build` (etap 2).
+     4. `check` `sw-pr-body`;
+     5. `check` `sw-merge spec` z werdyktami i identyfikatorami zadań z wyjść węzłów;
+     6. `check` `sw-notify spec`;
+     7. `check` `sw-handover-sh` (etap 1) albo przejście do `sw-build` (etap 2).
 4. **Przekazanie łańcuchowi sh-* (wyjątek etapu 1).**
    - `sw-handover-sh` uruchamia w projekcie aplikacji zadanie ze skillem `sh-start`, który dodaje konfigurację sh-*.
    - Od tej chwili projekt obsługuje wyłącznie przegląd sh-*: jest rozpoznawany po `sh-delivery.yml`, a `sw-gate` pomija repozytoria z tym plikiem.
    - Issue pomysłu dostaje `sw-spec-gotowa` i jest zamykane.
 5. **Budowa (etap 2, 3).**
    - Workflow `sw-build` w projekcie aplikacji:
-     1. architekt i jego PR przez `sw-merge`;
+     1. architekt i jego PR przez `sw-merge kod`;
      2. kierownik zakłada zadania modułów;
-     3. moduły przez `dispatch`/`fork` (najwyżej `maxParallel` projektu): `sw-inzynier`, potem `sw-recenzent` + CI (`github.wait-ci`) + `sw-bezpieczenstwo`, potem `sw-merge`;
+     3. moduły przez `dispatch`/`fork` (najwyżej `maxParallel` projektu): `sw-inzynier`, potem `sw-recenzent` + CI (`github.wait-ci`) + `sw-bezpieczenstwo`, potem `sw-merge kod`;
      4. integracja i `sw-tester`;
      5. `sw-bezpieczenstwo` (S9), `sw-deploy`, `sw-notify`.
    - Każdy krok zaczyna się od `check` `sw-limits`. Po wyczerpaniu prób albo limitu `sw-pause` wstrzymuje projekt.
 
 ### Model danych
 
-Nie ma bazy. Stan to obiekty GitHuba; skrypty są jedynym miejscem, które zmienia stan (poza etykietą decyzji, którą sprawdza `sw-ocena-wynik`).
+Nie ma bazy. Stan to obiekty GitHuba; zmieniają go wyłącznie skrypty. Każda zmiana etykiet to jedno `PATCH /repos/{o}/{r}/issues/{n}` z pełną listą `labels` po świeżym odczycie.
 
 #### Pomysł — issue w `sw-control`
 - **Etykiety stałe:** `sw-pomysl`.
@@ -437,10 +446,10 @@ Nie ma bazy. Stan to obiekty GitHuba; skrypty są jedynym miejscem, które zmien
 
   Metadane zmienia tylko skrypt przez `PATCH /repos/{o}/{r}/issues/{n}`, zawsze po świeżym odczycie.
 - **Komentarze:**
-  - `<!-- sw:ustalenia -->`: podsumowanie oceny jako wymagania, bez danych osobowych.
-  - `<!-- sw:odrzucenie -->`: powód odrzucenia. [DANE OSOBOWE] — repozytorium `sw-control` jest prywatne.
-- **Zamknięcie:** po odrzuceniu (stan `sw-odrzucony`), po przekazaniu w etapie 1 (`sw-spec-gotowa`), po wdrożeniu albo wstrzymaniu (etap 2).
-- **Treść rozmowy oceny:** zostaje wyłącznie w historii zadania Cezara na VPS. Nie jest kopiowana do GitHuba.
+  - `<!-- sw:ustalenia -->`: podsumowanie oceny jako wymagania, bez danych osobowych. Sprawdzane przez `sw-bezpieczenstwo` w `sw-spec`, zanim analityk z niego skorzysta.
+  - `<!-- sw:odrzucenie -->`: zredagowana wskazówka dla generatora (np. „za podobne do istniejących budżetów domowych”), bez danych osobowych.
+- **Treść rozmowy oceny i dosłowny powód odrzucenia:** zostają wyłącznie w historii zadania Cezara na VPS. [DANE OSOBOWE] Nie są kopiowane na GitHuba.
+- **Zamknięcie:** po odrzuceniu (stan `sw-odrzucony`), po przekazaniu w etapie 1 (`sw-spec-gotowa`), po wdrożeniu albo wstrzymaniu.
 
 #### Projekt — etykiety na issue pomysłu
 Jedna etykieta stanu projektu:
@@ -451,7 +460,7 @@ Etykiety dodatkowe:
 - `sw-czeka-na-limit` — zawieszenie po wyczerpaniu limitu planu;
 - `sw-bez-interwencji` — dodawana przy wdrożeniu, jeśli nigdy nie było `sw-stan-wstrzymany`.
 
-W etapie 1 projekt dochodzi do `sw-stan-specyfikacja`, a potem `sw-spec-gotowa`. Repozytorium aplikacji ma temat GitHuba `sw-projekt` i w README link do issue pomysłu.
+W etapie 1 projekt kończy się na `sw-stan-specyfikacja` i `sw-spec-gotowa` albo na `sw-stan-wstrzymany`. Repozytorium aplikacji ma temat GitHuba `sw-projekt` i w README link do issue pomysłu.
 
 #### Aktywny projekt
 Aktywnym projektem jest otwarte issue `sw-pomysl` w jednym z tych stanów:
@@ -460,14 +469,16 @@ Aktywnym projektem jest otwarte issue `sw-pomysl` w jednym z tych stanów:
 
 `sw-gate` oblicza to przy każdym cyklu.
 
+**Wzajemne wykluczenie cykli:** `sw-gate` zwraca `URUCHOM: NIC`, gdy w projekcie `sw-control` istnieje inne zadanie workflow `sw-sweep` w stanie `queued` albo `running` (`GET /api/v1/p/{id}/runs`, z pominięciem własnego `CEZ_RUN_ID`).
+
 #### Moduł i zadanie (etap 2, 3)
 - **Moduł:** plik kontraktu `docs/kontrakty/<modul>.md` w repozytorium aplikacji (sekcje `## Udostępnia`, `## Wymaga`, `## Forma`: „część aplikacji” albo „osobna usługa”) oraz issue z etykietą `sw-modul` i stanem `sw-modul-do-zrobienia` | `sw-modul-w-pracy` | `sw-modul-zmergowany`.
 - **Zadanie:** zadanie Cezara. Liczniki ponowień i rund to wyjścia węzłów `loop` (`iteration`). Czas ostatniego postępu to ostatni commit na gałęzi albo zmiana stanu zadania.
 
 #### Pozostałe obiekty
 - **Raport z przeglądu bezpieczeństwa:** `docs/security/<data>-raport.md` w repozytorium aplikacji, z wynikiem czterech punktów S9.
-- **Dziennik:** issue `sw-dziennik` w `sw-control`, jeden komentarz na zdarzenie (`odrzucona próba: <przyczyna>`, `ponowienie`, `wstrzymanie`, `merge`, `brak pomysłu`). Bez danych osobowych.
-- **Licznik cykli bez pomysłu:** liczba kolejnych komentarzy „brak pomysłu” w dzienniku od ostatniej karty, liczona przez `sw-gate`. Odporna na restart.
+- **Dziennik:** issue `sw-dziennik` w `sw-control`, jeden komentarz na zdarzenie (`odrzucona próba: <przyczyna>`, `ponowienie`, `wstrzymanie`, `merge`, `brak pomysłu`, `STAN: BLAD …`). Bez danych osobowych.
+- **Licznik cykli bez pomysłu:** liczba kolejnych komentarzy „brak pomysłu” w dzienniku od ostatniej karty, liczona przez `sw-gate`. Odporna na restart; nie ma osobnego magazynu.
 - **Konfiguracja:** `config/sw.json` (pola w `AGENTS.md`). Nowe pola zawsze z wartością domyślną w skryptach.
 - **Powiadomienie:** nie jest przechowywane przez rój. Deduplikację robi sidecar (10 minut na bramkę i numer).
 - **Subskrypcja powiadomień:** w sidecarze (`~/.cezar-push/subscriptions.json`), bez zmian.
@@ -484,35 +495,46 @@ URUCHOM: NIC | GENERATOR | OCENA <nr> | SPEC <nr> | PROJEKT <nr>      (tylko sw-
 WYNIK: <słowo>                                                         (pozostałe skrypty)
 ```
 
-Kod 0 oznacza `pass`, a 1 `fail`. Workflow rozgałęzia się warunkiem `{kind: output, ref: <węzeł>.output, op: contains, value: "URUCHOM: GENERATOR"}`.
+Ostrzeżenia idą na stderr (`UWAGA: …`). Kod 0 oznacza `pass`, a 1 `fail`. Workflow rozgałęzia się warunkiem `{kind: output, ref: <węzeł>.output, op: contains, value: "URUCHOM: GENERATOR"}`.
 
 | Skrypt | Wejście | Wyjście | Zmienia |
 |--------|---------|---------|---------|
-| `sw-gate` | – | `STAN`, jedna linia `URUCHOM` | nic |
+| `sw-gate` | – (`CEZ_RUN_ID` z Cezara) | `STAN`, jedna linia `URUCHOM`; przy `GENERATOR` plik `.ai/sw-run/generator.json` w worktree | nic na GitHubie |
 | `sw-start-ocena <nr>` | issue `sw-w-ocenie` | `WYNIK: ZADANIE <runId>` | `evalRunId` w metadanych |
-| `sw-ocena-wynik <nr>` | issue po rozmowie | `WYNIK: ZATWIERDZONY` / `ODRZUCONY` / `NIESPOJNY` | etykiety, `approvedAt`, zamknięcie przy odrzuceniu |
+| `sw-ocena-wynik <nr>` | issue + historia zadania `evalRunId` | `WYNIK: ZATWIERDZONY` / `ODRZUCONY` / `BRAK_DECYZJI` | etykiety, `approvedAt`, zamknięcie przy odrzuceniu |
 | `sw-create-repo <nr>` | issue `sw-zatwierdzony` bez `repo` | `WYNIK: REPO <owner/name> <projectId>` | repozytorium, projekt Cezara, `repo`/`projectId`, `sw-stan-specyfikacja` |
-| `sw-merge <repo> <pr> <tryb>` | `tryb` = `spec` albo `kod` | `WYNIK: ZMERGOWANY` / `WARUNKI_NIESPELNIONE <które>` | merge PR |
+| `sw-pr-body <repo> <pr> <plik-zalozen>` | werdykty z argumentów `--werdykt` | `WYNIK: ZAPISANO` | opis PR |
+| `sw-merge <repo> <pr> <tryb> --sha <sha> --werdykt <rola>=<wynik>@<runId>…` | `tryb` = `spec` albo `kod` | `WYNIK: ZMERGOWANY` / `WARUNKI_NIESPELNIONE <które>` | merge PR |
 | `sw-notify <rodzaj> <repo> <nr> <tytuł> <url>` | rodzaj: `spec`, `blocked` (etap 1); `deployed`, `paused`, `no-ideas` (etap 2) | `WYNIK: WYSLANO` / `WYNIK: POMINIETO` | nic w stanie roju |
 | `sw-log <tekst>` | tekst bez danych osobowych | `WYNIK: ZAPISANO` | komentarz w dzienniku |
-| `sw-handover-sh <nr>` | projekt `sw-stan-specyfikacja` z zmergowaną specyfikacją | `WYNIK: PRZEKAZANY <runId>` | `sw-spec-gotowa`, zamknięcie issue |
+| `sw-handover-sh <nr>` | projekt `sw-stan-specyfikacja` ze zmergowaną specyfikacją | `WYNIK: PRZEKAZANY <runId>` | `sw-spec-gotowa`, zamknięcie issue |
 
-Warunki w `sw-merge`:
-- `tryb spec`: w PR są komentarze z werdyktem przeglądu `zatwierdzona` i werdyktem bezpieczeństwa `pass`. Każdy znacznik `<!-- sw:werdykt rola=… model=… wynik=… -->` jest dopisywany przez węzeł workflow, a nie przez agenta.
-- `tryb kod`: jak wyżej oraz `approve` od recenzenta. Model recenzenta i bezpieczeństwa musi różnić się od modelu autora (ze znacznika autora). CI musi być zielone (`GET /repos/{o}/{r}/commits/{sha}/check-runs`); brak check-runów oznacza niespełniony warunek.
+**Warunki `sw-merge`:**
+- Werdykty przychodzą wyłącznie jako argumenty z wyjść węzłów workflow: `{{nodes.<id>.verdict}}` oraz identyfikator zadania węzła. Skrypt nie czyta werdyktów z komentarzy.
+- Model każdego oceniającego i autora skrypt odczytuje z rekordu zadania w Cezarze (`GET /api/v1/p/{id}/runs/{runId}`, pole tożsamości modelu), nie z konfiguracji. Recenzent i bezpieczeństwo muszą mieć inny model niż autor.
+- `--sha` to SHA głowy PR, który ocenili recenzent i bezpieczeństwo. Skrypt sprawdza, że głowa PR nadal ma ten SHA, i przekazuje go do `PUT …/pulls/{n}/merge` (`sha`).
+- **`tryb spec`:** `zatwierdzona` od przeglądu i `pass` od bezpieczeństwa.
+- **`tryb kod`:** `approve` od recenzenta, `pass` od bezpieczeństwa oraz zielone check-runy o nazwach z `requiredChecks` dla tego SHA (`GET …/commits/{sha}/check-runs`). Brak któregoś z nazwanych check-runów oznacza niespełniony warunek.
 
 #### Używane API Cezara (loopback, bez uwierzytelnienia)
-- `GET /health` — zdrowie (`sw-doctor`).
+- `GET /api/v1/health` → `{version, projects, …}` (`sw-doctor`; odpowiedź bez pola `version` oznacza brak Cezara). `GET /api/v1/workspace/config` → `resources.maxParallel` (ostrzeżenie w `sw-doctor`).
 - `POST /api/v1/p/{projectId}/runs` `{task, workflow, autonomous, model?}` → `{id}` (`sw-start-ocena`, `sw-create-repo`, `sw-handover-sh`).
-- `GET /api/v1/p/{projectId}/runs/{id}` → `status` ∈ `queued|running|waiting|review|done|failed|cancelled` (wykrywanie zaginionych zadań). `GET …/runs` (suma `costUsd` w `sw-limits`).
-- `POST /api/v1/projects/create` `{name, github: {owner}}` → projekt z prywatnym repozytorium i pustym commitem (`sw-create-repo`). Konflikt nazwy → kolejny przyrostek.
+- `GET /api/v1/p/{projectId}/runs` i `…/runs/{id}` → `status` ∈ `queued|running|waiting|review|done|failed|cancelled`, model, `costUsd`, `autoResumeAt`/liczba wznowień:
+  - wykrywanie zaginionych zadań;
+  - wzajemne wykluczenie cykli;
+  - suma kosztów (`sw-limits`);
+  - wyczerpane wznowienia po limicie planu (`sw-limits`).
+- `GET /api/v1/p/{projectId}/runs/{id}/history` → wiadomości zadania (`sw-ocena-wynik`).
+- `POST /api/v1/projects/create` `{name, github: {owner}}` → projekt z prywatnym repozytorium i pustym commitem.
+  - Odpowiedź 409 `folder_exists` oznacza zajętą nazwę lokalną. Odpowiedź 500 `github_create` oznacza błąd `gh` (np. zajętą nazwę na GitHubie). Cezar nie usuwa repozytorium utworzonego przed błędem.
+  - Dlatego `sw-create-repo` przed utworzeniem sprawdza `GET /repos/{o}/{nazwa}`. Repozytorium z tematem `sw-projekt` i linkiem do tego samego issue jest **adoptowane** (`POST /api/v1/projects/checkout {url}`). Każde inne istniejące repozytorium oznacza kolejny przyrostek `-2`, `-3`.
 - `PATCH /api/v1/projects/{id}` `{maxParallel}` — limit agentów projektu z `config/sw.json`.
-- `node "$CEZ_BIN" automation list|create|update|enable` — tylko w `sw-start`, tylko automatyzacje o nazwach `sw: …`.
+- `node "$CEZ_BIN" automation list|create|update|enable` — tylko w `sw-start`, tylko automatyzacje o nazwach `sw: …`; `delete` i zmiany automatyzacji `sh: …` są poza `bashAllowlist`.
 
 #### Używane API GitHuba (`gh api`, REST)
-- Issues: `GET /repos/{o}/sw-control/issues?labels=sw-pomysl&state=all`, `POST …/issues`, `PATCH …/issues/{n}`, `POST/DELETE …/issues/{n}/labels`, `POST …/issues/{n}/comments`.
-- PR: `GET …/pulls/{n}`, `GET …/issues/{n}/comments`, `PUT …/pulls/{n}/merge`, `GET …/commits/{sha}/check-runs`.
-- Repozytoria: `GET /repos/{o}/{r}/contents/.ai/cezar/workflows/sh-delivery.yml` (rozpoznanie projektów sh-*), `PUT /repos/{o}/{r}/topics`.
+- Issues: `GET /repos/{o}/sw-control/issues?labels=sw-pomysl&state=all`, `POST …/issues`, `PATCH …/issues/{n}` (treść, etykiety jako pełna lista), `POST …/issues/{n}/comments`.
+- PR: `GET …/pulls/{n}` (SHA głowy), `PATCH …/pulls/{n}` (opis), `PUT …/pulls/{n}/merge` (z `sha`), `GET …/commits/{sha}/check-runs`.
+- Repozytoria: `GET /repos/{o}/{r}` (widoczność `sw-control`, adopcja), `GET /repos/{o}/{r}/contents/.ai/cezar/workflows/sh-delivery.yml` (rozpoznanie projektów sh-*), `PUT /repos/{o}/{r}/topics`.
 
 #### Bramka powiadomień `cezar-push`
 - `POST http://127.0.0.1:4330/m/push/gate`, nagłówek `X-Cezar-Push-Token: <~/.cezar-push/gate-token>`, bez nagłówków `Origin` i `X-Forwarded-For`.
@@ -528,50 +550,78 @@ Ostatnia linia tury agenta oceny:
 CEZ:ASK {"questions":[{"header":"Decyzja","question":"Co robimy z tym pomysłem?","options":[{"label":"Zatwierdź"},{"label":"Odrzuć"}]}]}
 ```
 
-`AskCard` odsyła odpowiedź jako wiadomość „Decyzja: Zatwierdź” albo „Decyzja: Odrzuć”. Agent ustawia etykietę tylko po wiadomości dokładnie w tym formacie.
+`AskCard` odsyła odpowiedź jako wiadomość użytkownika „Decyzja: Zatwierdź” albo „Decyzja: Odrzuć”. `sw-ocena-wynik` uznaje tylko wiadomość użytkownika, nie asystenta, dokładnie w tym formacie.
 
 ### Integracje
 | Integracja | Dostawca | Tryb atrapy | Sekrety |
 |------------|----------|-------------|---------|
-| Orkiestracja, zadania, projekty | Cezar na VPS | `tests/tools/mock_api.py` (`/health`, trasy `/api/v1/...` dodawane wraz z krokami) | brak (loopback) |
+| Orkiestracja, zadania, projekty | Cezar na VPS | `tests/tools/mock_api.py` (`/api/v1/health`, `/api/v1/workspace/config`, kolejne trasy `/api/v1/...` dodawane wraz z krokami) | brak (loopback) |
 | GitHub | `gh` na koncie właściciela | `tests/fakes/gh` → atrapa `/github/...` | token `gh` na VPS (już skonfigurowany) |
-| Powiadomienia | sidecar `cezar-push` | trasa `/m/push/gate` w atrapie | `~/.cezar-push/gate-token` na VPS (już istnieje) |
+| Powiadomienia | sidecar `cezar-push` | trasa `/m/push/gate` w atrapie (dodawana w etapie 1) | `~/.cezar-push/gate-token` na VPS (już istnieje) |
 | Wyszukiwanie w sieci | narzędzie wyszukiwania agenta Claude Code w węźle `agent` | nie dotyczy (zachowanie agentów nie jest testowane w CI) | brak |
-| Modele | Claude Max przez Cezara | nie dotyczy | brak; `ANTHROPIC_API_KEY` zabroniony |
+| Modele | Claude Max przez Cezara | nie dotyczy | brak; zmienne kluczy API, bram i chmur zabronione (`sw-doctor`) |
 
 ### Plan implementacji
 
-Każdy krok kończy się działającym systemem i testami: unit i integracja dla skryptów, E2E w Compose z atrapą dla przepływu.
+Każdy krok kończy się działającym systemem i testami: unit i integracja dla skryptów, E2E w Compose z atrapą dla przepływu. W E2E węzły `agent` zastępuje skrypt testowy zwracający ustalony werdykt.
 
 #### Etap 1: pomysł, ocena i specyfikacja (S1–S4)
 Zależności: brak (tylko szkielet z tego PR).
 
 1. **`sw-start` i repozytorium sterujące:**
+   - utworzenie prywatnego `sw-control`, jeśli go nie ma,
    - etykiety `config/labels.json`,
    - automatyzacja `config/automations/sw-przeglad.json`,
    - kopiowanie `sw-sweep` do `sw-control`,
    - issue dziennika.
 
    Test: atrapa API Cezara (`automation list/create/update`) potwierdza, że automatyzacje `sh: …` nie są ruszane.
-2. **`sw-gate`: aktywny projekt i decyzje.** Decyzje `NIC` / `GENERATOR` / `OCENA` z wykrywaniem zaginionego zadania, pomijanie projektów sh-* i licznik cykli bez pomysłu. Testy tablicowe na stanach z atrapy GitHuba.
-3. **`sw-generator` + gałąź `GENERATOR` w `sw-sweep`.**
-   - `loop` 5 prób z werdyktami `karta`/`nieudana`;
-   - `sw-log` w dzienniku;
-   - po 24 cyklach bez pomysłu `sw-notify blocked` z linkiem do dziennika.
+2. **`sw-gate`: aktywny projekt i decyzje.**
+   - Decyzje `NIC` / `GENERATOR` / `OCENA` z wykrywaniem zaginionego zadania.
+   - Wzajemne wykluczenie cykli i pomijanie projektów sh-*.
+   - Licznik cykli bez pomysłu i liczba kolejnych `STAN: BLAD` z jednym powiadomieniem.
 
-   E2E: atrapa agenta, czyli węzeł zastąpiony skryptem testowym, który zwraca kartę albo nieudaną próbę. Test sprawdza 5 wpisów dziennika i brak powiadomienia.
-4. **`sw-ocena`:** `sw-start-ocena`, skill `sw-analityk` (tryb `ocena`), `sw-ocena-wynik`, przejścia `sw-w-ocenie` → `sw-zatwierdzony` | `sw-odrzucony` i odrzucanie duplikatów. E2E: odpowiedź „Decyzja: Odrzuć” zamyka issue i w następnym cyklu bramka zwraca `GENERATOR`.
-5. **`sw-create-repo`:** nazwa w kebab-case z przyrostkiem przy konflikcie, zasiew README (link do issue) i workflowu `sw-spec`, `maxParallel`, temat `sw-projekt`.
-6. **`sw-spec`:** tryb `spec` analityka, `sw-recenzent` (pętla 2 rund), `sw-bezpieczenstwo`, `sw-merge spec`, `sw-notify spec`. E2E: werdykt `uwagi` po 2 rundach ustawia `sw-stan-wstrzymany` z przyczyną w metadanych, zamyka issue, wysyła `sw-notify blocked` i w następnym cyklu bramka zwraca `GENERATOR` (S4, ostatnie kryterium).
+   Testy tablicowe na stanach z atrapy GitHuba i Cezara.
+3. **`sw-generator` + gałąź `GENERATOR` w `sw-sweep`.**
+   - Plik `.ai/sw-run/generator.json` (odrzucone pomysły i wskazówki), na tej podstawie odrzucanie duplikatów.
+   - `loop` 5 prób z werdyktami `karta`/`nieudana`.
+   - `sw-log` w dzienniku.
+   - Po 24 cyklach bez pomysłu `sw-notify blocked` z linkiem do dziennika.
+
+   E2E: 5 nieudanych prób daje 5 wpisów w dzienniku i brak powiadomienia. Duplikat odrzuconego pomysłu nie trafia do właściciela.
+4. **`sw-ocena`:**
+   - `sw-start-ocena`;
+   - skill `sw-analityk` (tryb `ocena`) bez prawa do zmiany etykiet;
+   - `sw-ocena-wynik` z odczytem historii zadania;
+   - przejścia `sw-w-ocenie` → `sw-zatwierdzony` | `sw-odrzucony`.
+
+   E2E: wiadomość użytkownika „Decyzja: Odrzuć” zamyka issue i w następnym cyklu bramka zwraca `GENERATOR`. Ta sama treść od asystenta nie zmienia stanu.
+5. **`sw-create-repo`:** nazwa w kebab-case z przyrostkiem przy konflikcie, adopcja repozytorium z przerwanego przebiegu, zasiew README (link do issue) i workflowu `sw-spec`, `maxParallel`, temat `sw-projekt`.
+6. **`sw-spec`:**
+   - tryb `spec` analityka;
+   - `sw-recenzent` (pętla 2 rund);
+   - `sw-bezpieczenstwo` (także komentarz `sw:ustalenia`);
+   - `sw-pr-body` (werdykt i założenia w opisie PR);
+   - `sw-merge spec` (SHA, modele z rekordów zadań);
+   - `sw-notify spec`.
+
+   E2E: werdykt `uwagi` po 2 rundach ustawia `sw-stan-wstrzymany` z przyczyną w metadanych, zamyka issue, wysyła `sw-notify blocked`, a w następnym cyklu bramka zwraca `GENERATOR` (S4, ostatnie kryterium). Push po werdykcie (inny SHA) blokuje merge.
 7. **`sw-handover-sh`:** zadanie `sh-start` w projekcie aplikacji, `sw-spec-gotowa`, zamknięcie issue, pomijanie projektu przez `sw-gate`.
-8. **Sprawdzenie na VPS:** instalacja obok sh-skills, jeden pełny przebieg od pomysłu do przekazania. Raport w PR.
+8. **Sprawdzenie na VPS:** instalacja obok sh-skills i jeden pełny przebieg od pomysłu do przekazania.
+
+   Kryterium: w PR kroku jest raport z linkami do issue pomysłu, repozytorium aplikacji i zmergowanego PR specyfikacji oraz potwierdzenie, że lista skilli i automatyzacji `sh-*` w Cezarze jest niezmieniona.
 
 #### Etap 2: autonomiczne dostarczanie jednym modułem (S5 jeden moduł, S7 testy E2E, S8–S13)
 Zależności: etap 1, kroki 1–6 (pętla pomysłów, repozytorium i specyfikacja). Krok 7 etapu 1 zostaje zastąpiony przejściem do `sw-build`.
 
-1. **`sw-limits` i `sw-pause`** (S11, S12): limit czasu (`approvedAt` + `projectTimeLimitHours`), suma `costUsd`, `sw-czeka-na-limit` przy limicie planu (wznowienie zostawione Cezarowi), brak `ANTHROPIC_API_KEY`, ponowienia i 3 godziny bez postępu.
+1. **`sw-limits` i `sw-pause`** (S11, S12):
+   - limit czasu (`approvedAt` + `projectTimeLimitHours`) i suma `costUsd`;
+   - `sw-czeka-na-limit` przy limicie planu (wznowienie zostawione Cezarowi);
+   - po wyczerpaniu 12 automatycznych wznowień Cezara nowe zadanie od przerwanego kroku, bez zużywania ponowień;
+   - brak zmiennych rozliczanych poza planem;
+   - ponowienia i 3 godziny bez postępu.
 2. **Zmiana w cezar-pwa (osobne repozytorium):** rodzaje bramki `deployed`, `paused`, `no-ideas` w sidecarze i aplikacji. Zgłoszenie z zakresu przygotowuje ten krok; do jego wdrożenia działa zastępstwo z etapu 1.
-3. **`sw-architekt` (jeden moduł) i `sw-merge kod`** (S5, S8): reviewer na innym modelu, CI, bezpieczeństwo; znaczniki werdyktów.
+3. **`sw-architekt` (jeden moduł) i `sw-merge kod`** (S5, S8): reviewer na innym modelu, nazwane check-runy, bezpieczeństwo, powiązanie z SHA.
 4. **`sw-build` dla jednego modułu:** `sw-inzynier`, `sw-recenzent`, `sw-tester` (S7: E2E wszystkich scenariuszy aplikacji).
 5. **`sw-bezpieczenstwo` dla aplikacji i `sw-deploy`** (S9, S10): cztery punkty, kontener na VPS, dostęp tylko po uwierzytelnieniu, test odmowy bez logowania.
 6. **S13 i powiadomienia:** odsetek „bez interwencji” w treści powiadomień `deployed`/`paused`, jeden aktywny projekt aż do wdrożenia albo wstrzymania.
