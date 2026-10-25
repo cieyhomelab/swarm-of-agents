@@ -6,8 +6,9 @@
 SW_ROOT="${SW_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 export SW_ROOT
 
-# Cezar HTTP API on the VPS loopback; overridable for tests.
-SW_CEZAR_URL="${SW_CEZAR_URL:-http://127.0.0.1:4322}"
+# Cezar HTTP API on the VPS loopback (port 4321, verified on the VPS 2026-10-25;
+# docs/CEZAR_API.md in cezar-pwa still names 4322). Overridable for tests.
+SW_CEZAR_URL="${SW_CEZAR_URL:-http://127.0.0.1:4321}"
 export SW_CEZAR_URL
 
 # Runtime configuration (limits, retries, models).
