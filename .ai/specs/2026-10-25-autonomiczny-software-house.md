@@ -29,7 +29,7 @@ Cel: jedna interakcja właściciela na aplikację (ocena pomysłu), reszta w pe�
 | Integrator | Składa moduły w całość i doprowadza do działania pełnej aplikacji. |
 | Tester | Weryfikuje działanie według kryteriów akceptacji. |
 | Reviewer | Recenzuje zmiany; działa na innym modelu niż inżynier. |
-| Przegląd bezpieczeństwa | Sprawdza zmiany i aplikację przed merge i przed wydaniem. |
+| Przegląd bezpieczeństwa | Osobny agent na innym modelu niż autor zmian. Sprawdza zmiany przed merge i aplikację przed wydaniem. |
 
 Role od architekta do reviewera to obecne role sh-* rozwijane w tym repozytorium, bez bramek ludzkich.
 
@@ -112,12 +112,12 @@ Role od architekta do reviewera to obecne role sh-* rozwijane w tym repozytorium
 PR jest mergowany bez człowieka, gdy jednocześnie:
 - reviewer na innym modelu niż autor zatwierdził zmianę,
 - CI jest zielone,
-- przegląd bezpieczeństwa przeszedł.
+- przegląd bezpieczeństwa (osobny agent na innym modelu niż autor) przeszedł.
 
 **Kryteria akceptacji**
 - Zakładając spełnione trzy warunki, wtedy PR jest mergowany automatycznie.
 - Zakładając niespełniony którykolwiek warunek, wtedy PR nie jest mergowany.
-- Zakładając recenzję wykonaną przez ten sam model co autor, wtedy nie liczy się jako zatwierdzenie.
+- Zakładając recenzję lub przegląd bezpieczeństwa wykonane przez ten sam model co autor, wtedy nie liczą się jako zatwierdzenie.
 
 ### S9: Przegląd bezpieczeństwa przed wydaniem
 1. Przed wdrożeniem pełna aplikacja przechodzi przegląd bezpieczeństwa.
@@ -142,19 +142,22 @@ PR jest mergowany bez człowieka, gdy jednocześnie:
 1. Zadanie nie przechodzi (testy, CI, recenzja, przegląd bezpieczeństwa albo brak postępu).
 2. System ponawia automatycznie.
 3. Po wyczerpaniu ponowień projekt jest wstrzymywany, a właściciel dostaje powiadomienie z przyczyną.
+4. System generuje nowy pomysł (S1). Wstrzymany projekt zostaje w repozytorium bez dalszej pracy.
 
 **Kryteria akceptacji**
 - Zakładając nieudane zadanie, wtedy system ponawia je bez udziału właściciela.
 - Zakładając wyczerpane ponowienia, wtedy projekt ma stan „wstrzymany”, a powiadomienie zawiera przyczynę i ostatni etap.
-- Zakładając wstrzymanie, wtedy system nie zadaje właścicielowi pytań.
+- Zakładając wstrzymanie, wtedy system nie zadaje właścicielowi pytań i tworzy nowy pomysł (S1) bez akcji właściciela.
+- Zakładając wstrzymany projekt, wtedy agenci nie podejmują w nim dalszej pracy.
 
 ### S12: Limity czasu i zużycia
-1. Każdy projekt ma limit czasu i zużycia (konfigurowalny).
+1. Każdy projekt ma limit czasu (domyślnie 7 dni kalendarzowych od zatwierdzenia pomysłu) i limit zużycia; obie wartości w konfiguracji.
 2. Rój nie włącza płatnego dodatkowego zużycia.
-3. Po przekroczeniu limitu projektu projekt jest wstrzymywany z powiadomieniem.
+3. Po przekroczeniu limitu projektu projekt jest wstrzymywany z powiadomieniem, a system generuje nowy pomysł (jak w S11).
 
 **Kryteria akceptacji**
-- Zakładając przekroczony limit projektu, wtedy projekt ma stan „wstrzymany”, a właściciel dostaje powiadomienie z przyczyną „limit”.
+- Zakładając projekt zatwierdzony 7 dni temu i niewdrożony, wtedy projekt ma stan „wstrzymany”, właściciel dostaje powiadomienie z przyczyną „limit czasu”, a powstaje nowy pomysł.
+- Zakładając przekroczony limit zużycia projektu, wtedy projekt ma stan „wstrzymany”, a właściciel dostaje powiadomienie z przyczyną „limit zużycia”.
 - Zakładając wyczerpany limit okna zużycia planu, wtedy praca jest wstrzymywana i wznawiana automatycznie po odnowieniu limitu, bez ponowień, które zużywają limit.
 - Zakładając dowolny stan, wtedy system nie włącza dodatkowego płatnego zużycia.
 
@@ -196,7 +199,7 @@ Wymagania właściciela (istniejąca infrastruktura):
 - Komunikacja z właścicielem, karty pomysłów i specyfikacje po polsku.
 
 ## Przypadki brzegowe i błędy
-- **Brak pomysłu spełniającego kryteria:** generator próbuje dalej; po kilku nieudanych próbach w jednym cyklu przerywa cykl i próbuje w następnym, bez powiadomienia.
+- **Brak pomysłu spełniającego kryteria:** po 5 nieudanych próbach w jednym cyklu generator przerywa cykl i próbuje w następnym, bez powiadomienia.
 - **Właściciel nie odpowiada na pomysł:** pomysł czeka w stanie „w ocenie”; nowy pomysł nie powstaje.
 - **Brak uprawnień do utworzenia repozytorium lub push:** projekt wstrzymany z powiadomieniem i przyczyną (S11).
 - **Brak dostępu do sieci przy sprawdzaniu pomysłu:** pomysł nie trafia do właściciela bez sprawdzenia; ponowienie w następnym cyklu.
@@ -224,16 +227,7 @@ Wymagania właściciela (istniejąca infrastruktura):
 - **Próg sukcesu:** nie ustalono wartości docelowej; system raportuje odsetek. Uzasadnienie: najpierw trzeba poznać wartość bazową.
 - **Repozytoria prywatne:** każda nowa aplikacja w prywatnym repozytorium. Uzasadnienie: aplikacje są prywatnymi prototypami.
 
-## Otwarte pytania
-1. **Co po wstrzymaniu projektu (utknięcie lub przekroczony limit)?**
-   a) projekt zostaje wstrzymany, a system generuje nowy pomysł (rekomendacja: zachowuje zasadę jednej interakcji)
-   b) system czeka na Twoją decyzję w aplikacji (druga interakcja)
-2. **Limit czasu na projekt:**
-   a) 7 dni kalendarzowych, wartość w konfiguracji (rekomendacja)
-   b) inna wartość
-3. **Przegląd bezpieczeństwa:**
-   a) osobny agent na innym modelu niż autor zmian (rekomendacja: ta sama zasada co reviewer)
-   b) część pracy reviewera
+- **Próby generowania:** najwyżej 5 prób znalezienia pomysłu spełniającego kryteria w jednym cyklu, wartość w konfiguracji. Uzasadnienie: ogranicza zużycie limitu na nieudane próby.
 
 ## Sekcje techniczne
 > Uzupełnia architekt po zatwierdzeniu specyfikacji: architektura, model danych, kontrakty API, plan implementacji.
