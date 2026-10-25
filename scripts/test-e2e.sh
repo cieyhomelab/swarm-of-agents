@@ -11,8 +11,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-run_id="${E2E_RUN_ID:-$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)}"
+# od reads a fixed number of bytes, so no pipe is cut short (SIGPIPE + pipefail).
+run_id="${E2E_RUN_ID:-$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')}"
 project="e2e-${run_id}"
+
+# E2E_PRINT_PROJECT=1: print the Compose project name and exit (used by tests).
+if [ "${E2E_PRINT_PROJECT:-0}" = "1" ]; then
+  echo "$project"
+  exit 0
+fi
 
 secrets="${SH_SECRETS_DIR:-$HOME/.sh-secrets}/swarm-of-agents.env"
 if [ -f "$secrets" ]; then

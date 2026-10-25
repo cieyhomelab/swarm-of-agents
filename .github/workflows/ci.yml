@@ -31,7 +31,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: E2E
-        run: scripts/test-e2e.sh
+        run: |
+          set +e
+          scripts/test-e2e.sh 2>&1 | tee e2e.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface the failure as an annotation (readable through the checks API).
+            echo "::error title=e2e failed::$(tail -40 e2e.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+          fi
+          exit "$status"
       - name: Two parallel E2E runs leave nothing behind
         run: |
           E2E_RUN_ID=ci-a scripts/test-e2e.sh > a.log 2>&1 & a=$!
@@ -45,5 +53,8 @@ jobs:
           $(docker volume ls --format '{{.Name}}' | grep '^e2e-' || true)"
           if [ -n "$(echo "$left" | tr -d '[:space:]')" ]; then
             echo "leftover e2e resources:"; echo "$left"; status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=parallel e2e failed::$( (tail -20 a.log; tail -20 b.log; echo "$left") | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
           fi
           exit "$status"
