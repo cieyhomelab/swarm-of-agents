@@ -48,8 +48,9 @@ if [ -f config/labels.json ]; then
 fi
 
 # References to sh-skills elements inside product code. Only the etap-1
-# handover script may name sh-* (it starts sh-start in an app project).
-allow_ref='^bin/sw-handover-sh:'
+# handover script may name sh-* (it starts sh-start in an app project) and
+# the gate (it recognises projects on the sh-* chain by their workflow file).
+allow_ref='^bin/sw-(handover-sh|gate):'
 while IFS= read -r hit; do
   [[ "$hit" =~ $allow_ref ]] && continue
   err "reference to sh-skills in $hit"

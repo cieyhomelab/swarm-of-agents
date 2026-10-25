@@ -23,11 +23,11 @@ teardown() {
 
 control() { curl -fsS -X POST -d "$1" "$SW_CEZAR_URL/__control" >/dev/null; }
 
-@test "healthy services give STAN: OK and URUCHOM: NIC" {
+@test "healthy services give STAN: OK and, without a project, URUCHOM: GENERATOR" {
   run "$ROOT/bin/sw-gate"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "STAN: OK" ]
-  [ "${lines[1]}" = "URUCHOM: NIC" ]
+  [ "${lines[1]}" = "URUCHOM: GENERATOR" ]
 }
 
 @test "Cezar health failure is detected" {

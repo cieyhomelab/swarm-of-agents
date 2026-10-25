@@ -12,8 +12,8 @@ setup() {
   export FAKE_GH_API_URL="http://127.0.0.1:$PORT"
   export PATH="$ROOT/tests/fakes:$PATH"
   control '{"pulls": {"o/app#7": {"head_sha": "sha1", "body": "Opis PR"}},
-            "runs": {"p1/author": {"modelIdentity": "anthropic/opus[1m]"}, "p1/rev": {"modelIdentity": "anthropic/sonnet[1m]"},
-                     "p1/sec": {"modelIdentity": "anthropic/haiku[1m]"}, "p1/revopus": {"modelIdentity": "claude-opus-4-5"}, "p1/steprev": {"steps": [{"modelIdentity": "anthropic/sonnet"}]}, "p1/oldfield": {"model": "sonnet"}}}'
+            "runs": [{"project": "p1", "id": "author", "modelIdentity": "anthropic/opus[1m]"}, {"project": "p1", "id": "rev", "modelIdentity": "anthropic/sonnet[1m]"},
+                     {"project": "p1", "id": "sec", "modelIdentity": "anthropic/haiku[1m]"}, {"project": "p1", "id": "revopus", "modelIdentity": "claude-opus-4-5"}, {"project": "p1", "id": "steprev", "steps": [{"modelIdentity": "anthropic/sonnet"}]}, {"project": "p1", "id": "oldfield", "model": "sonnet"}]}'
 }
 
 teardown() {

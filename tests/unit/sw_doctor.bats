@@ -9,6 +9,7 @@ setup() {
 #!/usr/bin/env bash
 case "$*" in
   *"api user"*) echo cieyhomelab ;;
+  *"issues"*) echo '[]' ;;
   *"api repos/"*) [ "${STUB_PRIVATE:-true}" = missing ] && exit 1; echo "${STUB_PRIVATE:-true}" ;;
   *) exit 2 ;;
 esac
@@ -17,8 +18,9 @@ EOF
   cat > "$STUBS/curl" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
+  *"/runs"*) echo '[]'; case "$*" in *"-w"*) printf '\n200' ;; esac ;;
   *workspace/config*) echo "{\"resources\":{\"maxParallel\":${STUB_MAX_PARALLEL:-3}}}" ;;
-  *health*) echo '{"version":"1.0.0","projects":[]}' ;;
+  *health*) echo '{"version":"1.0.0","projects":[{"id":"p1","name":"sw-control"}]}' ;;
   *) exit 22 ;;
 esac
 EOF
@@ -98,11 +100,11 @@ teardown() { rm -rf "$STUBS"; }
   [[ "$output" == *"niepoprawna konfiguracja"* ]]
 }
 
-@test "sw-gate decides nothing on a healthy runtime" {
+@test "sw-gate asks for a generator when there is no active project" {
   run "$ROOT/bin/sw-gate"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "STAN: OK" ]
-  [ "${lines[1]}" = "URUCHOM: NIC" ]
+  [ "${lines[1]}" = "URUCHOM: GENERATOR" ]
 }
 
 @test "sw-gate fails but still prints a decision on a broken runtime" {

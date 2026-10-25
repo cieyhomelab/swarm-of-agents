@@ -7,8 +7,8 @@ setup() {
   curl -fsS -X POST -d '{"reset": true}' "$MOCK_URL/__control" >/dev/null
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
     "pulls": {"cieyhomelab/app#3": {"head_sha": "abc123", "body": "Specyfikacja"}},
-    "runs": {"proj/analityk": {"modelIdentity": "anthropic/opus[1m]"}, "proj/recenzent": {"modelIdentity": "anthropic/sonnet[1m]"},
-             "proj/recenzent-opus": {"modelIdentity": "anthropic/opus[1m]"}, "proj/bezp": {"modelIdentity": "anthropic/haiku[1m]"}}}' >/dev/null
+    "runs": [{"project": "proj", "id": "analityk", "modelIdentity": "anthropic/opus[1m]"}, {"project": "proj", "id": "recenzent", "modelIdentity": "anthropic/sonnet[1m]"},
+             {"project": "proj", "id": "recenzent-opus", "modelIdentity": "anthropic/opus[1m]"}, {"project": "proj", "id": "bezp", "modelIdentity": "anthropic/haiku[1m]"}]}' >/dev/null
   BIN="${SW_HOME:-/work}/bin"
   WORK="$(mktemp -d)"
 }
