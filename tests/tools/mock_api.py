@@ -10,6 +10,9 @@ Routes:
   GET  /github/<path>             GitHub REST, from the in-memory state
   POST /github/<path>             GitHub REST writes: labels, issues (create)
   PUT  /github/<path>             GitHub REST writes: repository contents
+  GET  /api/v1/p/<project>/runs/<id>  Cezar run record from state "runs" ("<project>/<id>" -> record)
+  GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged})
+  PUT  /github/repos/<o>/<r>/pulls/<n>/merge  409 unless body.sha equals the head sha
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
@@ -38,6 +41,8 @@ DEFAULTS = {
     "labels": [],
     "issues": [],
     "contents": {},
+    "pulls": {},
+    "runs": {},
     "automations": [
         {"id": "a1b2c3d4-0001", "name": "sh: architekt", "enabled": True, "project": "swarm-of-agents"},
         {"id": "a1b2c3d4-0002", "name": "sh: realizacja", "enabled": True, "project": "swarm-of-agents"},
@@ -71,6 +76,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"version": "0.0.0-mock", "projects": projects, "bootProject": "mock"})
         if self.path == "/api/v1/workspace/config":
             return self._send(200, {"resources": {"maxParallel": STATE["max_parallel"]}})
+        run = re.fullmatch(r"/api/v1/p/([^/]+)/runs/([^/]+)", self.path)
+        if run:
+            record = STATE["runs"].get(f"{run[1]}/{run[2]}")
+            return self._send(200, record) if record else self._send(404, {"message": "Not Found"})
+        pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
+        if pull:
+            item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}")
+            if item is None:
+                return self._send(404, {"message": "Not Found"})
+            return self._send(200, {"number": int(pull[2]), "body": item.get("body", ""),
+                                    "merged": item.get("merged", False), "head": {"sha": item["head_sha"]}})
         if self.path == "/__requests":
             return self._send(200, REQUESTS)
         if self.path == "/github/user":
@@ -147,10 +163,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(201, issue)
         return self._send(404, {"message": "Not Found"})
 
+    def do_PATCH(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        self._record("PATCH", raw)
+        pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
+        item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}") if pull else None
+        if item is None:
+            return self._send(404, {"message": "Not Found"})
+        item["body"] = json.loads(raw).get("body", item.get("body", ""))
+        return self._send(200, {"number": int(pull[2])})
+
     def do_PUT(self):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         self._record("PUT", raw)
+        merge = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)/merge", self.path)
+        if merge:
+            item = STATE["pulls"].get(f"{merge[1]}#{merge[2]}")
+            if item is None:
+                return self._send(404, {"message": "Not Found"})
+            if json.loads(raw).get("sha") != item["head_sha"]:
+                return self._send(409, {"message": "Head branch was modified"})
+            item["merged"] = True
+            return self._send(200, {"merged": True})
         repo_prefix = f"/github/repos/{STATE['control_repo']}/contents/"
         if self.path.startswith(repo_prefix) and STATE["control_private"] is not None:
             path = self.path[len(repo_prefix):]

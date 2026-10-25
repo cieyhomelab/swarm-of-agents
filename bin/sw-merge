@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# sw-merge — merges a PR only when the conditions of the spec (S4/S8) hold.
+#
+# Usage: sw-merge <owner/repo> <pr> <spec|kod> --sha <sha>
+#          [--projekt <projectId>] --werdykt <rola>=<wynik>@<runId>...
+# Roles: autor (any result; only its run is used), recenzent, bezpieczenstwo.
+# Verdicts come from workflow node outputs, never from PR comments. Models are
+# read from the Cezar run records (GET /api/v1/p/{id}/runs/{runId}).
+# Output: WYNIK: ZMERGOWANY | WYNIK: WARUNKI_NIESPELNIONE <a,b,...>
+# Exit code 0 when merged, 1 otherwise.
+set -uo pipefail
+
+# shellcheck source=bin/lib/common.sh
+. "$(dirname "$0")/lib/common.sh"
+
+usage() { sw_die "uzycie: sw-merge <owner/repo> <pr> <spec|kod> --sha <sha> [--projekt <id>] --werdykt <rola>=<wynik>@<runId>..."; }
+
+[ $# -ge 3 ] || usage
+repo="$1"; pr="$2"; mode="$3"; shift 3
+sha=""
+project="${CEZ_PROJECT_ID:-}"
+verdict_args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sha) [ $# -ge 2 ] || usage; sha="$2"; shift 2 ;;
+    --projekt) [ $# -ge 2 ] || usage; project="$2"; shift 2 ;;
+    --werdykt) [ $# -ge 2 ] || usage; verdict_args+=("$2"); shift 2 ;;
+    *) usage ;;
+  esac
+done
+sw_require gh jq curl python3
+[[ "$repo" == */* ]] || usage
+[[ "$pr" =~ ^[0-9]+$ ]] || usage
+[ -n "$sha" ] || usage
+
+fail() { echo "STAN: BLAD $*"; echo "WYNIK: WARUNKI_NIESPELNIONE $*"; exit 1; }
+
+# model_of <runId> — model identity from the Cezar run record; empty when unknown.
+model_of() {
+  [ -n "$project" ] && [ -n "$1" ] || return 0
+  curl -fsS "$SW_CEZAR_URL/api/v1/p/$project/runs/$1" 2>/dev/null | jq -r '.model // empty' 2>/dev/null
+}
+
+verdicts='[]'
+author_model=""
+for arg in "${verdict_args[@]+"${verdict_args[@]}"}"; do
+  [[ "$arg" =~ ^([a-z]+)=([^@]*)@(.+)$ ]] || usage
+  role="${BASH_REMATCH[1]}"; result="${BASH_REMATCH[2]}"; run_id="${BASH_REMATCH[3]}"
+  model="$(model_of "$run_id")"
+  if [ "$role" = "autor" ]; then
+    author_model="$model"
+  else
+    verdicts="$(jq -c --arg r "$role" --arg w "$result" --arg m "$model" \
+      '. + [{role: $r, result: $w, model: $m}]' <<<"$verdicts")"
+  fi
+done
+
+head_sha="$(gh api "repos/$repo/pulls/$pr" --jq .head.sha 2>/dev/null)" \
+  || { echo "STAN: BLAD nie mozna odczytac PR $repo#$pr"; exit 1; }
+
+request="$(jq -nc --arg mode "$mode" --arg sha "$sha" --arg head "$head_sha" \
+  --arg author "$author_model" --argjson verdicts "$verdicts" \
+  '{mode: $mode, sha: $sha, headSha: $head, authorModel: $author, verdicts: $verdicts}')"
+unmet="$(python3 "$SW_ROOT/bin/lib/sw_merge.py" <<<"$request")" \
+  || { echo "STAN: BLAD blad modulu warunkow merge"; exit 1; }
+
+if [ -n "$unmet" ]; then
+  list="$(paste -sd, <<<"$unmet")"
+  sw_log "merge $repo#$pr zablokowany: $list"
+  echo "WYNIK: WARUNKI_NIESPELNIONE $list"
+  exit 1
+fi
+
+if jq -nc --arg sha "$sha" '{sha: $sha, merge_method: "squash"}' \
+  | gh api -X PUT "repos/$repo/pulls/$pr/merge" --input - >/dev/null; then
+  echo "WYNIK: ZMERGOWANY"
+else
+  # GitHub refuses a merge when the head moved after the check (409).
+  fail "merge-odrzucony"
+fi
