@@ -10,12 +10,13 @@ Routes:
   GET  /github/<path>             GitHub REST, from the in-memory state
   POST /github/<path>             GitHub REST writes: labels, issues (create)
   PUT  /github/<path>             GitHub REST writes: repository contents
+  GET  /api/v1/p/<project>/runs[/<id>]        Cezar tasks of one project, from state "runs"
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
 State keys: health_status, github_user (null = logged out), control_repo,
 control_private (null = repository missing), max_parallel, labels, issues,
-contents, automations (starts with automations of another agent chain, which
+contents, repo_files (other repositories: "owner/name/path" entries), runs, automations (starts with automations of another agent chain, which
 must stay untouched).
 
 Usage: mock_api.py [--port N] [--port-file FILE]   (port 0 = random)
@@ -38,6 +39,8 @@ DEFAULTS = {
     "labels": [],
     "issues": [],
     "contents": {},
+    "repo_files": [],
+    "runs": [],
     "automations": [
         {"id": "a1b2c3d4-0001", "name": "sh: architekt", "enabled": True, "project": "swarm-of-agents"},
         {"id": "a1b2c3d4-0002", "name": "sh: realizacja", "enabled": True, "project": "swarm-of-agents"},
@@ -81,6 +84,15 @@ class Handler(BaseHTTPRequestHandler):
             if STATE["control_private"] is None:
                 return self._send(404, {"message": "Not Found"})
             return self._send(200, {"full_name": STATE["control_repo"], "private": STATE["control_private"]})
+        run = re.fullmatch(r"/api/v1/p/([^/]+)/runs(?:/([^/]+))?", self.path)
+        if run:
+            if run[2] is None:
+                return self._send(200, STATE["runs"])
+            found = [r for r in STATE["runs"] if r["id"] == run[2]]
+            return self._send(200, found[0]) if found else self._send(404, {"message": "Not Found"})
+        github_file = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/contents/(.+)", self.path)
+        if github_file and f"{github_file[1]}/{github_file[2]}" in STATE["repo_files"]:
+            return self._send(200, {"sha": "sha0", "content": ""})
         automations = re.fullmatch(r"/cez/p/([^/]+)/automations", self.path)
         if automations:
             return self._send(200, [a for a in STATE["automations"] if a.get("project") == automations[1]])
@@ -92,8 +104,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, STATE["labels"])
             if rest == "issues":
                 wanted = parse_qs(url.query).get("labels", [None])[0]
+                state = parse_qs(url.query).get("state", ["open"])[0]
                 found = [i for i in STATE["issues"]
-                         if wanted is None or wanted in [lb["name"] for lb in i["labels"]]]
+                         if (wanted is None or wanted in [lb["name"] for lb in i["labels"]])
+                         and (state == "all" or i.get("state", "open") == state)]
                 return self._send(200, found)
             if rest.startswith("contents/") and rest[9:] in STATE["contents"]:
                 entry = STATE["contents"][rest[9:]]
