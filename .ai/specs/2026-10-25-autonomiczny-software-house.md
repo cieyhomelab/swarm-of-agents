@@ -40,7 +40,7 @@ Cel: jedna interakcja właściciela na aplikację (ocena pomysłu), reszta w pe�
 | Reviewer | Recenzuje zmiany; inny model niż autor zmiany. |
 | Przegląd bezpieczeństwa | Osobny agent; inny model niż autor zmiany. Sprawdza PR przed merge i aplikację przed wdrożeniem. |
 
-Analityk, architekt, kierownik, inżynier, tester i reviewer to obecne role sh-* rozwijane w tym repozytorium, bez bramek ludzkich. Generator, integrator i przegląd bezpieczeństwa to nowe role.
+Analityk, architekt, kierownik, inżynier, tester i reviewer to obecne role sh-* przeniesione do tego repozytorium jako skille z prefiksem `sw-` (np. `sw-analityk`), bez bramek ludzkich. Generator, integrator i przegląd bezpieczeństwa to nowe role, też z prefiksem `sw-`.
 
 ## Scenariusze
 
@@ -255,6 +255,18 @@ Wymagania właściciela (istniejąca infrastruktura):
 - Równoległość ograniczona konfigurowalnym limitem agentów (start: 3), bo wszyscy agenci i czat właściciela dzielą limity jednego planu Claude Max, a zadania dzielą zasoby VPS.
 - Stan systemu jest trwały: po restarcie orkiestratora praca wznawia się od ostatniego zapisanego stanu.
 
+### Współistnienie z sh-skills
+Wymaganie właściciela: skille i workflowy tego systemu działają na tym samym VPS i w tym samym Cezarze co sh-skills, nie nadpisując ich.
+- Każdy skill i workflow ma prefiks `sw-` (katalog skilla, pole `name` w SKILL.md, nazwa workflow), np. `sw-analityk`, `sw-delivery`, `sw-sweep`.
+- Repozytorium jest klonowane na VPS do osobnego katalogu niż `~/sh-skills`, a skrypty odwołują się tylko do niego.
+- Instalacja skilli `sw-*` nie zmienia ani nie usuwa skilli `sh-*`; projekty prowadzone łańcuchem sh-* działają dalej bez zmian.
+- Skille `sw-*` wywołują tylko skille `sw-*` (oraz `om-*` z Open Mercato), nigdy `sh-*`, z wyjątkiem przekazania projektu do łańcucha sh-* w etapie 1.
+
+**Kryteria akceptacji**
+- Zakładając zainstalowane skille `sh-*`, gdy instaluję skille `sw-*`, wtedy lista skilli w Cezarze zawiera obie grupy, a pliki skilli `sh-*` są niezmienione.
+- Zakładając projekt w toku na łańcuchu sh-*, gdy instaluję skille `sw-*`, wtedy jego następne zadanie uruchamia skill `sh-*`.
+- Zakładając repozytorium `swarm-of-agents`, wtedy żaden katalog skilla, pole `name` ani nazwa workflow nie zaczyna się od `sh-`.
+
 ### Języki
 - Komunikacja z właścicielem, karty pomysłów i specyfikacje po polsku.
 
@@ -286,7 +298,7 @@ Wymagania właściciela (istniejąca infrastruktura):
 3. **Praca równoległa modułami:** wiele modułów z kontraktami, równoległa implementacja do limitu agentów, integracja. Scenariusze: S5 (wiele modułów), S6, S7 (integracja).
 
 ## Założenia
-- **Migracja:** `swarm-of-agents` przejmuje skille i workflowy z sh-skills oraz konfigurację z sh-control; stare repozytoria są archiwizowane po uruchomieniu etapu 1. Analityk potrzebuje wariantu autonomicznego. Uzasadnienie: decyzja właściciela, jedno źródło prawdy; migracja to osobne zadanie, nie scenariusz systemu.
+- **Migracja:** `swarm-of-agents` przejmuje skille i workflowy z sh-skills oraz konfigurację z sh-control; skille dostają prefiks `sw-` i działają obok `sh-*`; stare repozytoria są archiwizowane po uruchomieniu etapu 2, bo do tego czasu etap 1 przekazuje budowę łańcuchowi sh-*. Analityk potrzebuje wariantu autonomicznego. Uzasadnienie: decyzja właściciela, jedno źródło prawdy; migracja to osobne zadanie, nie scenariusz systemu.
 - **Etap 1 kończy się na specyfikacji:** generator rusza po zmergowaniu specyfikacji, bo w etapie 1 nie ma jeszcze stanów „wdrożony” i „wstrzymany”. Uzasadnienie: etap 1 działa samodzielnie; zasada jednego projektu obowiązuje od etapu 2.
 - **Ponowienia i rundy:** 2 ponowienia na zadanie, 3 rundy poprawek na PR, 2 rundy poprawek specyfikacji; wartości w konfiguracji. Uzasadnienie: najprostsze i łatwe do zmiany.
 - **Brak postępu = 3 godziny:** ten sam próg co dotychczasowy próg utknięcia PR w sh-kierownik.
