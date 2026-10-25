@@ -54,3 +54,14 @@ check() {
   run bash -c "echo '{\"mode\":\"kod\"}' | python3 '$ROOT/bin/lib/sw_merge.py'"
   [ "$output" = "tryb-kod" ]
 }
+
+@test "the same model under different spellings is one model" {
+  for spelling in opus 'opus[1m]' 'anthropic/opus[1m]' claude-opus-4-5 'Anthropic/Claude-Opus-4-5[1m]'; do
+    [ "$(check zatwierdzona "$spelling" pass haiku opus abc abc)" = "model-recenzent" ]
+    [ "$(check zatwierdzona sonnet pass "$spelling" 'anthropic/opus' abc abc)" = "model-bezpieczenstwo" ]
+  done
+}
+
+@test "different families under different spellings are different models" {
+  [ -z "$(check zatwierdzona 'anthropic/sonnet[1m]' pass claude-haiku-4-5 claude-opus-4-5 abc abc)" ]
+}

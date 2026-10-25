@@ -35,10 +35,11 @@ sw_require gh jq curl python3
 
 fail() { echo "STAN: BLAD $*"; echo "WYNIK: WARUNKI_NIESPELNIONE $*"; exit 1; }
 
-# model_of <runId> — model identity from the Cezar run record; empty when unknown.
+# model_of <runId> — normalized model identity (modelIdentity, else the first step's)
+# from the Cezar run record; empty when unknown.
 model_of() {
   [ -n "$project" ] && [ -n "$1" ] || return 0
-  curl -fsS "$SW_CEZAR_URL/api/v1/p/$project/runs/$1" 2>/dev/null | jq -r '.model // empty' 2>/dev/null
+  curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project/runs/$1" 2>/dev/null | jq -r '.modelIdentity // ([.steps[]? | .modelIdentity // empty] | first) // empty' 2>/dev/null
 }
 
 verdicts='[]'

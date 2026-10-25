@@ -12,8 +12,8 @@ setup() {
   export FAKE_GH_API_URL="http://127.0.0.1:$PORT"
   export PATH="$ROOT/tests/fakes:$PATH"
   control '{"pulls": {"o/app#7": {"head_sha": "sha1", "body": "Opis PR"}},
-            "runs": {"p1/author": {"model": "opus"}, "p1/rev": {"model": "sonnet"},
-                     "p1/sec": {"model": "haiku"}, "p1/revopus": {"model": "opus"}}}'
+            "runs": {"p1/author": {"modelIdentity": "anthropic/opus[1m]"}, "p1/rev": {"modelIdentity": "anthropic/sonnet[1m]"},
+                     "p1/sec": {"modelIdentity": "anthropic/haiku[1m]"}, "p1/revopus": {"modelIdentity": "claude-opus-4-5"}, "p1/steprev": {"steps": [{"modelIdentity": "anthropic/sonnet"}]}, "p1/oldfield": {"model": "sonnet"}}}'
 }
 
 teardown() {
@@ -52,6 +52,17 @@ merge() {
   [ "$status" -eq 1 ]
   [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE model-recenzent" ]
   [ "$(pull_state | jq .merged)" = "false" ]
+}
+
+@test "model identity taken from the step when the record lacks it" {
+  merge --sha sha1 --werdykt autor=gotowa@author --werdykt recenzent=zatwierdzona@steprev --werdykt bezpieczenstwo=pass@sec
+  [ "$status" -eq 0 ]
+}
+
+@test "raw model field without modelIdentity: model unknown, not merged" {
+  merge --sha sha1 --werdykt autor=gotowa@author --werdykt recenzent=zatwierdzona@oldfield --werdykt bezpieczenstwo=pass@sec
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE model-recenzent" ]
 }
 
 @test "run record missing in Cezar: model unknown, not merged" {
