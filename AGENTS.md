@@ -45,7 +45,28 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 - Zawsze sprząta (`down -v --remove-orphans` w `trap`), także przy błędzie i przerwaniu.
 - Wczytuje `${SH_SECRETS_DIR:-$HOME/.sh-secrets}/swarm-of-agents.env`, jeśli istnieje. Nazwa zmiennej `SH_SECRETS_DIR` pochodzi z łańcucha, który buduje to repozytorium (sh-skills).
 - Działa bez sekretów: Cezar, GitHub i sidecar push są atrapami (`tests/tools/mock_api.py`, `tests/fakes/gh`).
+- Zmienne z pliku sekretów są wczytywane na hoście, a do kontenera trafiają tylko te wymienione w `compose.yml` (`environment`). Test, który potrzebuje sekretu, dopisuje go tam jako `NAZWA: ${NAZWA:-}`.
+- Sprząta kontenery, sieci, wolumeny i obrazy projektu (`down -v --remove-orphans --rmi local`). Sygnał INT/TERM najpierw przerywa trwające polecenie Compose.
+- `E2E_RUN_ID` musi pasować do `^[a-z0-9][a-z0-9_-]*$`.
 - Obrazy bazowe pochodzą z `mirror.gcr.io` (odporność na limit Docker Hub).
+- Na VPS bramka przeglądu sh-skills usuwa zasoby `e2e-*` starsze niż 6 godzin, także te z tego repozytorium. To nieszkodliwe, ale przebieg E2E nie może trwać tak długo.
+
+## Konfiguracja `config/sw.json`
+| Pole | Domyślnie | Znaczenie (specyfikacja) |
+|------|-----------|--------------------------|
+| `cycleHours` | 1 | interwał cyklu; automatyzacja „sw: przegląd co godzinę” |
+| `maxParallelAgents` | 3 | limit równoległych agentów projektu → `maxParallel` projektu w Cezarze (S6) |
+| `projectTimeLimitHours` | 168 | limit czasu projektu od zatwierdzenia pomysłu (S12) |
+| `projectUsageLimitUsd` | 150 | limit zużycia projektu jako suma `costUsd` z Cezara (S12) |
+| `retriesPerTask` | 2 | ponowienia zadania (S11) |
+| `fixRoundsPerPr` | 3 | rundy poprawek na PR (S8) |
+| `specFixRounds` | 2 | rundy poprawek specyfikacji (S4) |
+| `ideaAttemptsPerCycle` | 5 | próby generowania w cyklu (S1) |
+| `noIdeaNotifyAfterCycles` | 24 | po tylu cyklach bez pomysłu jedno powiadomienie |
+| `stalledAfterHours` | 3 | brak postępu = zadanie nieudane (S11) |
+| `githubOwner`, `controlRepo` | `cieyhomelab`, `cieyhomelab/sw-control` | konto i repozytorium sterujące (musi być prywatne) |
+| `requiredChecks` | `["checks", "e2e"]` | nazwy check-runów wymaganych do merge (S8); ustawia architekt aplikacji w jej repozytorium |
+| `models.*` | `opus` / `sonnet` / `haiku` | model każdej roli; recenzja i bezpieczeństwo inne niż autor |
 
 ## Konwencje
 - **Nazwy:** wszystko, co ten system instaluje na VPS, ma prefiks `sw`:
@@ -66,7 +87,9 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
   - każda zmiana stanu ma najpierw odczyt i warunek, bo przegląd może się powtórzyć;
   - zadania Cezara traktuj jako jednorazowe.
 - **Migracje:** nie ma bazy. Zmiana etykiet stanu albo formatu `config/sw.json` wymaga notatki w PR i zgodności wstecz: nowe pola mają wartości domyślne.
-- **Modele:** z `config/sw.json` (`models.*`). Recenzja i przegląd bezpieczeństwa zawsze na innym modelu niż autor.
+- **Modele:** z `config/sw.json` (`models.*`). Każdy węzeł `agent` ma `runner: claude` i jawny `model` (sprawdza walidator). Recenzja i przegląd bezpieczeństwa zawsze na innym modelu niż autor; faktyczny model sprawdza się w rekordzie zadania Cezara, nie w konfiguracji.
+- **Uprawnienia agentów:** węzły `agent` mają `allowedTools` i `bashAllowlist` ograniczone do tego, czego rola potrzebuje. Zmiany stanu, merge i automatyzacje robią skrypty, nie agenci.
+- **Język:** logika w Bashu z `jq`. Gdy logika skryptu przerasta prostą obróbkę JSON (maszyna stanów, warunki merge), dopuszczalny jest moduł w Pythonie 3 z biblioteką standardową w `bin/lib/*.py`, wołany ze skryptu `bin/sw-*` i testowany przez `bats` (ADR 0001).
 
 ## Testy
 - Każda zmiana w zachowaniu ma test.
