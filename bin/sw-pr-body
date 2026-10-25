@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# sw-pr-body — writes the verdicts and the assumptions list into a PR description.
+#
+# Usage: sw-pr-body <owner/repo> <pr> <plik-zalozen> --werdykt <rola>=<wynik>@<runId>...
+# Replaces the block between the sw-werdykty markers (idempotent) and keeps the
+# rest of the description. Output: WYNIK: ZAPISANO
+set -uo pipefail
+
+# shellcheck source=bin/lib/common.sh
+. "$(dirname "$0")/lib/common.sh"
+
+usage() { sw_die "uzycie: sw-pr-body <owner/repo> <pr> <plik-zalozen> --werdykt <rola>=<wynik>@<runId>..."; }
+
+[ $# -ge 3 ] || usage
+repo="$1"; pr="$2"; assumptions_file="$3"; shift 3
+verdicts=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --werdykt) [ $# -ge 2 ] || usage; verdicts+=("$2"); shift 2 ;;
+    *) usage ;;
+  esac
+done
+sw_require gh jq
+[[ "$repo" == */* ]] || usage
+[[ "$pr" =~ ^[0-9]+$ ]] || usage
+[ -r "$assumptions_file" ] || { echo "STAN: BLAD brak pliku zalozen $assumptions_file"; exit 1; }
+
+section="$(mktemp)"; trap 'rm -f "$section"' EXIT
+{
+  echo "<!-- sw-werdykty -->"
+  echo "## Werdykty"
+  for v in "${verdicts[@]+"${verdicts[@]}"}"; do
+    [[ "$v" =~ ^([a-z]+)=([^@]*)@(.+)$ ]] || usage
+    echo "- ${BASH_REMATCH[1]}: ${BASH_REMATCH[2]} (zadanie ${BASH_REMATCH[3]})"
+  done
+  echo
+  echo "## Założenia"
+  cat "$assumptions_file"
+  echo
+  echo "<!-- /sw-werdykty -->"
+} > "$section"
+
+current="$(gh api "repos/$repo/pulls/$pr" --jq '.body // ""' 2>/dev/null)" \
+  || { echo "STAN: BLAD nie mozna odczytac PR $repo#$pr"; exit 1; }
+# Drop a previous block, then append the new one.
+kept="$(awk '/<!-- sw-werdykty -->/{skip=1} !skip{print} /<!-- \/sw-werdykty -->/{skip=0}' <<<"$current")"
+body="$(printf '%s\n\n%s\n' "$kept" "$(cat "$section")")"
+
+if jq -nc --arg body "$body" '{body: $body}' | gh api -X PATCH "repos/$repo/pulls/$pr" --input - >/dev/null; then
+  echo "WYNIK: ZAPISANO"
+else
+  echo "STAN: BLAD zapis opisu PR $repo#$pr nie powiodl sie"
+  exit 1
+fi

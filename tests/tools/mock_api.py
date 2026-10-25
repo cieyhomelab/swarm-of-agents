@@ -11,6 +11,9 @@ Routes:
   POST /github/<path>             GitHub REST writes: labels, issues (create)
   PUT  /github/<path>             GitHub REST writes: repository contents
   GET  /api/v1/p/<project>/runs[/<id>]        Cezar tasks of one project, from state "runs"
+                                              (list of records; a record with "project" is visible only there)
+  GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged})
+  PUT  /github/repos/<o>/<r>/pulls/<n>/merge  409 unless body.sha equals the head sha
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
@@ -39,6 +42,7 @@ DEFAULTS = {
     "labels": [],
     "issues": [],
     "contents": {},
+    "pulls": {},
     "repo_files": [],
     "runs": [],
     "automations": [
@@ -74,6 +78,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"version": "0.0.0-mock", "projects": projects, "bootProject": "mock"})
         if self.path == "/api/v1/workspace/config":
             return self._send(200, {"resources": {"maxParallel": STATE["max_parallel"]}})
+        pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
+        if pull:
+            item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}")
+            if item is None:
+                return self._send(404, {"message": "Not Found"})
+            return self._send(200, {"number": int(pull[2]), "body": item.get("body", ""),
+                                    "merged": item.get("merged", False), "head": {"sha": item["head_sha"]}})
         if self.path == "/__requests":
             return self._send(200, REQUESTS)
         if self.path == "/github/user":
@@ -86,9 +97,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"full_name": STATE["control_repo"], "private": STATE["control_private"]})
         run = re.fullmatch(r"/api/v1/p/([^/]+)/runs(?:/([^/]+))?", self.path)
         if run:
+            runs = STATE["runs"]
+            if isinstance(runs, list):
+                runs = [r for r in runs if r.get("project", run[1]) == run[1]]
             if run[2] is None:
-                return self._send(200, STATE["runs"])
-            found = [r for r in STATE["runs"] if r["id"] == run[2]]
+                return self._send(200, runs)
+            found = [r for r in runs if r["id"] == run[2]]
             return self._send(200, found[0]) if found else self._send(404, {"message": "Not Found"})
         github_file = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/contents/(.+)", self.path)
         if github_file and f"{github_file[1]}/{github_file[2]}" in STATE["repo_files"]:
@@ -161,10 +175,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(201, issue)
         return self._send(404, {"message": "Not Found"})
 
+    def do_PATCH(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        self._record("PATCH", raw)
+        pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
+        item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}") if pull else None
+        if item is None:
+            return self._send(404, {"message": "Not Found"})
+        item["body"] = json.loads(raw).get("body", item.get("body", ""))
+        return self._send(200, {"number": int(pull[2])})
+
     def do_PUT(self):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         self._record("PUT", raw)
+        merge = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)/merge", self.path)
+        if merge:
+            item = STATE["pulls"].get(f"{merge[1]}#{merge[2]}")
+            if item is None:
+                return self._send(404, {"message": "Not Found"})
+            if json.loads(raw).get("sha") != item["head_sha"]:
+                return self._send(409, {"message": "Head branch was modified"})
+            item["merged"] = True
+            return self._send(200, {"merged": True})
         repo_prefix = f"/github/repos/{STATE['control_repo']}/contents/"
         if self.path.startswith(repo_prefix) and STATE["control_private"] is not None:
             path = self.path[len(repo_prefix):]
