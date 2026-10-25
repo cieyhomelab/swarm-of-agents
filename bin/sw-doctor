@@ -55,7 +55,8 @@ fi
 
 if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   health="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null)" || health=""
-  if ! printf '%s' "$health" | jq -e '.version | strings' >/dev/null 2>&1; then
+  # Explicit empty check: jq 1.6 (Debian bookworm) returns 0 for -e on empty input.
+  if [ -z "$health" ] || ! printf '%s' "$health" | jq -e '.version | strings' >/dev/null 2>&1; then
     problems+=("Cezar niedostepny pod $SW_CEZAR_URL")
   elif [ "$config_ok" -eq 1 ]; then
     want="$(jq -r '.maxParallelAgents // 3' "$SW_CONFIG")"

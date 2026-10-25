@@ -111,3 +111,10 @@ teardown() { rm -rf "$STUBS"; }
   [ "$status" -eq 1 ]
   [[ "$output" == *"URUCHOM: NIC"* ]]
 }
+
+@test "empty answer from Cezar is reported (jq 1.6 empty-input behaviour)" {
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/curl"
+  run "$ROOT/bin/sw-doctor"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Cezar niedostepny"* ]]
+}
