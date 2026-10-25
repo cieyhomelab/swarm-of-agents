@@ -333,7 +333,7 @@ Decyzja o stosie i jej uzasadnienie: `docs/adr/0001-stos-technologiczny.md`. Zas
 #### Komponenty
 | Komponent | Gdzie | Rola |
 |-----------|-------|------|
-| Cezar | VPS, `127.0.0.1:4322` | Silnik: zadania, workflowy w wersji 2, automatyzacje, wznawianie po limicie planu, rejestracja projektów. Nie jest modyfikowany. |
+| Cezar | VPS, `127.0.0.1:4321` | Silnik: zadania, workflowy w wersji 2, automatyzacje, wznawianie po limicie planu, rejestracja projektów. Nie jest modyfikowany. |
 | cezar-pwa + sidecar `cezar-push` | VPS (`/m/`, `127.0.0.1:4330`) | Rozmowa oceny (`RunScreen`, `AskCard`) i powiadomienia push. Etap 1 bez zmian; etap 2 dodaje nowe rodzaje bramek (zmiana w repozytorium cezar-pwa). |
 | `swarm-of-agents` (to repozytorium) | klon w `~/swarm-of-agents` | Kod roju: `skills/sw-*`, `workflows/sw-*.yml`, `bin/sw-*`, `config/`. Skille linkowane do `~/.claude/skills` przez `scripts/install.sh`. |
 | `sw-control` | **prywatne** repozytorium GitHub + projekt Cezara | Repozytorium sterujące: issues pomysłów i dziennik (stan), automatyzacja `sw: przegląd co godzinę`, kopie workflowów `sw-sweep` i `sw-ocena` w `.ai/cezar/workflows/`. `sw-doctor` blokuje pracę, gdy repozytorium nie jest prywatne. |
