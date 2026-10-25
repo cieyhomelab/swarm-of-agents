@@ -37,12 +37,16 @@ Ustalenia z kodu Cezara (`open-mercato/cezar`, commit `f6b910f`):
   - limit jest liczony per konto, więc nowe zadania na tym koncie są wstrzymywane.
 - Równoległość: `resources.maxParallel` dla całego obszaru roboczego (domyślnie 2) i `maxParallel` per projekt (`PATCH /api/v1/projects/:id`).
 - Cezar nie ma magazynu klucz-wartość dla agentów, uwierzytelnienia ani powiadomień push.
+- Zdrowie: `GET /api/v1/health` zwraca obiekt z polem `version`; nie ma trasy `/health` w korzeniu.
+- Historia zadania (`GET …/runs/{id}/history`) zawiera wiadomości użytkownika, a rekord zadania zawiera faktyczny model.
+- `projects/create` przy zajętej nazwie zwraca 409 (folder lokalny) albo 500 (błąd `gh`) i nie usuwa repozytorium utworzonego przed błędem.
+- Po 12 automatycznych wznowieniach zadanie kończy się porażką z prośbą o ręczną kontynuację.
 
 Ustalenia z kodu cezar-pwa (`cieyhomelab/cezar-pwa`, commit `6ae9908`):
 
 - Ekran zadania (`RunScreen`) prowadzi rozmowę z zadaniem Cezara (`/messages`, `/continue`) i pokazuje karty pytań (`AskCard`) z przyciskami.
 - Sidecar `cezar-push`:
-  - sam wysyła powiadomienie `attention`, gdy zadanie przechodzi w `waiting`; powiadomienie otwiera ekran tego zadania;
+  - sam wysyła powiadomienie `attention`, gdy zadanie przechodzi w `waiting`, `review` albo `failed`; powiadomienie otwiera ekran tego zadania;
   - przyjmuje od procesów na hoście bramki `spec|merge|blocked` (`POST 127.0.0.1:4330/m/push/gate`, nagłówek `X-Cezar-Push-Token`); takie powiadomienie otwiera adres na GitHubie.
 - Reguła projektu: Cezara się nie modyfikuje; zmiany serwerowe trafiają do sidecara.
 
@@ -52,7 +56,11 @@ Ustalenia z kodu cezar-pwa (`cieyhomelab/cezar-pwa`, commit `6ae9908`):
 Logika roju to skille Claude Code (`skills/sw-*/SKILL.md`), workflowy Cezara w wersji 2 (`workflows/sw-*.yml`) i krótkie skrypty powłoki (`bin/sw-*`). Nie ma własnego serwera, bazy ani kontenera produkcyjnego.
 
 ### 2. Język skryptów: Bash + `jq` + `gh` + `curl`
-Ten sam zestaw co w sh-skills, z którym agenci już pracują. Skrypty narzędziowe testów (walidacja YAML, atrapy API) są w Pythonie 3 z biblioteką standardową i PyYAML; nie trafiają na VPS jako część systemu.
+Ten sam zestaw co w sh-skills, z którym agenci już pracują. Większość skryptów to cienkie spoiwo między `gh`, Cezarem i `jq`.
+
+Wyjątek: logika, która przerasta prostą obróbkę JSON (maszyna stanów bramki, warunki `sw-merge`), może być modułem w Pythonie 3 z biblioteką standardową (`bin/lib/*.py`), wołanym przez skrypt `bin/sw-*` i testowanym przez `bats`. Python 3 jest na VPS (Ubuntu) i w CI bez instalowania pakietów.
+
+Narzędzia testów (walidacja YAML, atrapy API) też są w Pythonie; nie trafiają na VPS jako część systemu.
 
 ### 3. Stan systemu: GitHub jako maszyna stanów
 Specyfikacja wymaga trwałego stanu. Cezar nie ma magazynu, a sh-skills już używa etykiet jako maszyny stanów. Dlatego:
@@ -61,7 +69,8 @@ Specyfikacja wymaga trwałego stanu. Cezar nie ma magazynu, a sh-skills już uż
   - jest projektem Cezara z automatyzacją `sw: przegląd co godzinę` i workflowami `sw-sweep`, `sw-ocena`;
   - każdy pomysł to issue z etykietą `sw-pomysl`, a stan pomysłu to etykieta (`sw-w-ocenie`, `sw-zatwierdzony`, `sw-odrzucony`, `sw-spec-gotowa`);
   - dziennik systemu to komentarze w jednym przypiętym issue z etykietą `sw-dziennik`;
-  - licznik cykli bez pomysłu to plik w `CEZ_SHARED_CACHE_DIR` (pamięć podręczna checków per projekt), a gdy jej zabraknie — liczba wpisów „brak pomysłu” w dzienniku od ostatniej karty.
+  - licznik cykli bez pomysłu to liczba kolejnych wpisów „brak pomysłu” w dzienniku od ostatniej karty, więc nie ma osobnego magazynu;
+  - repozytorium musi być prywatne; `sw-doctor` blokuje pracę, gdy nie jest.
 - **Projekt aplikacji** to prywatne repozytorium utworzone przez `POST /api/v1/projects/create`, powiązane z issue pomysłu (link w obu kierunkach). Jego stan to etykiety `sw-stan-*` na issue pomysłu.
 - **Konfiguracja** w `config/sw.json` w tym repozytorium: limity, liczba ponowień i rund, liczba prób, limit agentów, modele ról. Zestaw wzorcowy kategorii wykluczonych jest w `config/kategorie-wykluczone.md`.
 
@@ -70,8 +79,10 @@ Ocena pomysłu to nieautonomiczne zadanie workflow `sw-ocena` w projekcie `sw-co
 
 - agent `sw-analityk` (tryb ocena) prowadzi rozmowę;
 - kończy ją pytaniem `CEZ:ASK` z opcjami „Zatwierdź” i „Odrzuć”;
-- po odpowiedzi zapisuje decyzję etykietą na issue pomysłu;
-- węzeł `check` sprawdza, że issue ma dokładnie jedną etykietę decyzji.
+- po odpowiedzi zapisuje komentarze z ustaleniami albo zredagowaną wskazówką z odrzucenia (bez danych osobowych);
+- węzeł `check` `sw-ocena-wynik` czyta historię zadania z Cezara i ustawia etykietę decyzji wyłącznie na podstawie wiadomości użytkownika „Decyzja: Zatwierdź” albo „Decyzja: Odrzuć”.
+
+Agent czyta treści z sieci, więc może dostać wstrzyknięte polecenia. Dlatego jedyna bramka ludzka nie zależy od tego, co agent zapisze.
 
 Powiadomienie push i ekran rozmowy dają istniejące mechanizmy cezar-pwa (`attention` → `RunScreen` → `AskCard`), bez zmian w cezar-pwa w etapie 1.
 
@@ -82,7 +93,9 @@ Decyzja żyje na GitHubie, a nie w pamięci zadania. Zadanie oceny jest więc je
 - **Recenzja i przegląd bezpieczeństwa:** `sonnet`, czyli inny model Claude niż autor, zgodnie z definicją „inny model”.
 - **Proste kroki porządkowe:** `haiku`.
 
-Mapowanie ról na modele jest w `config/sw.json`.
+Mapowanie ról na modele jest w `config/sw.json`. Warunek „inny model” sprawdza się na faktycznym modelu z rekordu zadania Cezara, bo plan może przełączyć model. Werdykty trafiają do `sw-merge` jako wyjścia węzłów workflow, a nie z komentarzy, które każdy agent na tym koncie mógłby napisać. Merge jest powiązany z ocenionym SHA i nazwanymi check-runami.
+
+Każdy węzeł `agent` ma `runner: claude`, co sprawdza walidator, a także ograniczone `allowedTools` i `bashAllowlist`.
 
 ### 6. Równoległość
 - Limit równoległych agentów projektu to `maxParallel` projektu w Cezarze, ustawiany z `config/sw.json` przy tworzeniu repozytorium.
@@ -105,7 +118,8 @@ Mapowanie ról na modele jest w `config/sw.json`.
 - **Rozmowa oceny jako nowa funkcja sidecara cezar-pwa (własny czat z API modelu).** Odrzucona: wymagałaby klucza API (sprzeczne z „tylko Claude Max”) i dużej zmiany w innym repozytorium. Zadanie Cezara daje to samo bez zmian.
 - **Węzeł `ask-user` zamiast `CEZ:ASK` w agencie.** Odrzucona: odpowiedź węzła `ask-user` jest trzymana w pamięci procesu Cezara i ginie przy restarcie, a rozmowa przed decyzją i tak wymaga agenta.
 - **Rozpoznawanie przeglądu po webhooku.** Niedostępne: Cezar nie ma wyzwalacza webhook. Zostaje automatyzacja co godzinę, zgodnie z definicją cyklu.
-- **Narzędzia testowe w Node (vitest).** Odrzucona: drugi ekosystem tylko dla testów skryptów powłoki. `bats` jest standardem dla Bash.
+- **Narzędzia testowe w Node (vitest).** Odrzucona: wymaga npm i `node_modules` tylko dla testów skryptów powłoki, a `bats` jest standardem dla Bash. Pomocnicze narzędzia testów w Pythonie działają z biblioteką standardową i PyYAML, dostępnymi na runnerach i VPS bez instalacji.
+- **Cała logika `bin/` w Pythonie.** Rozważona: łatwiejsze testy maszyny stanów i warunków merge. Odrzucona jako zasada ogólna, bo większość skryptów to wywołania `gh`/`curl`, które w Bashu są krótsze i spójne z sh-skills. Przyjęta jako wyjątek dla złożonej logiki (punkt 2 decyzji).
 
 ## Konsekwencje
 
@@ -113,7 +127,11 @@ Mapowanie ról na modele jest w `config/sw.json`.
 - Etap 2 wymaga zmiany w cezar-pwa: nowe rodzaje powiadomień bramki (`wdrożony`, `wstrzymany`, `brak pomysłów`) w sidecarze i aplikacji, zgodnie z jej regułami zgodności wstecznej.
   - Do tego czasu „brak pomysłów” idzie bramką `blocked` z linkiem do issue dziennika.
   - „Specyfikacja gotowa” idzie bramką `spec` z linkiem do PR.
-- **Ograniczenie S12, pkt 5 i 6 (dodatkowe płatne zużycie).** Cezar ani Claude Code nie udostępniają programowo stanu ustawienia „usage credits” planu. Weryfikowalna część to brak klucza API w środowisku Cezara: bez niego nie ma rozliczenia według stawek API. To sprawdza `bin/sw-doctor` przed każdym przydziałem. Wyłączenie „usage credits” w ustawieniach konta pozostaje obowiązkiem właściciela, opisanym w `AGENTS.md`.
+- **Ograniczenie S12, krok 5 i ostatnie kryterium akceptacji (dodatkowe płatne zużycie).** Cezar ani Claude Code nie udostępniają programowo stanu ustawienia „usage credits” planu. Weryfikowalna część to brak zmiennych, które przełączają rozliczenie poza plan: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, `_FOUNDRY`. To sprawdza `bin/sw-doctor` przed każdym przydziałem. Wyłączenie „usage credits” w ustawieniach konta pozostaje obowiązkiem właściciela, opisanym w `AGENTS.md`. Kryterium jest więc spełnione częściowo; decyzja należy do właściciela przy bramce D.
+- **Powiadomienia o porażkach.** Sidecar powiadamia o każdym zadaniu wchodzącym w `failed`, a specyfikacja nie pozwala na takie wiadomości. Dlatego zadania autonomiczne roju kończą się statusem `success`, a porażkę zapisują w dzienniku. Ponowienia są pętlami `loop` w jednym zadaniu. Kilka kolejnych porażek środowiska daje jedno powiadomienie `blocked`.
+- **Nakładające się cykle.** Cezar pilnuje startu automatyzacji, ale nie wyklucza nakładania się zadań. `sw-gate` zwraca `NIC`, gdy trwa inne zadanie `sw-sweep`.
+- **Wyczerpane wznowienia.** Po 12 wznowieniach `sw-limits` uruchamia nowe zadanie od przerwanego kroku, nie licząc tego jako ponowienia.
 - Jednostką limitu zużycia projektu jest suma `costUsd` z zadań projektu w Cezarze (ekwiwalent kosztu liczony przez Cezara także na planie Max). Domyślny limit jest w `config/sw.json`.
 - **Codzienna aktualizacja Cezara restartuje serwer.** Zadania są zaprojektowane jako jednorazowe i odtwarzalne z etykiet: przegląd wykrywa issue bez żywego zadania i uruchamia je ponownie, co spełnia wymaganie trwałości stanu.
-- **Automatyzacje nie mają unikalnych nazw.** `sw-start` musi aktualizować automatyzację „po nazwie” przez `list` i dopasowanie nazwy `sw: …`, nigdy nie dotykając nazw `sh: …`.
+- **Automatyzacje nie mają unikalnych nazw.** `sw-start` musi aktualizować automatyzację „po nazwie” przez `list` i dopasowanie nazwy `sw: …`, nigdy nie dotykając nazw `sh: …`. `delete` jest poza `bashAllowlist`.
+- **Limit równoległości jest wspólny.** `resources.maxParallel` (domyślnie 2) jest wspólne z sh-skills. `sw-doctor` ostrzega, gdy jest mniejsze niż `maxParallelAgents`; zmiana należy do właściciela.
