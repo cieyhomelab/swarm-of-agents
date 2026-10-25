@@ -256,16 +256,31 @@ Wymagania właściciela (istniejąca infrastruktura):
 - Stan systemu jest trwały: po restarcie orkiestratora praca wznawia się od ostatniego zapisanego stanu.
 
 ### Współistnienie z sh-skills
-Wymaganie właściciela: skille i workflowy tego systemu działają na tym samym VPS i w tym samym Cezarze co sh-skills, nie nadpisując ich.
-- Każdy skill i workflow ma prefiks `sw-` (katalog skilla, pole `name` w SKILL.md, nazwa workflow), np. `sw-analityk`, `sw-delivery`, `sw-sweep`.
-- Repozytorium jest klonowane na VPS do osobnego katalogu niż `~/sh-skills`, a skrypty odwołują się tylko do niego.
-- Instalacja skilli `sw-*` nie zmienia ani nie usuwa skilli `sh-*`; projekty prowadzone łańcuchem sh-* działają dalej bez zmian.
-- Skille `sw-*` wywołują tylko skille `sw-*` (oraz `om-*` z Open Mercato), nigdy `sh-*`, z wyjątkiem przekazania projektu do łańcucha sh-* w etapie 1.
+Wymaganie właściciela: skille, workflowy, automatyzacje i skrypty tego systemu działają na tym samym VPS i w tym samym Cezarze co sh-skills, nie nadpisując ich i nie przejmując ich projektów.
+
+| Element | sh-skills (zostaje bez zmian) | swarm-of-agents |
+|---------|-------------------------------|-----------------|
+| Skille | `sh-*` (np. `sh-analityk`) | `sw-*` (katalog skilla i pole `name` w SKILL.md, np. `sw-analityk`) |
+| Workflowy Cezara | `sh-delivery`, `sh-sweep` (plik i pole `name`) | `sw-*`, np. `sw-delivery`, `sw-sweep` |
+| Automatyzacje Cezara | nazwy `sh: …` (np. „sh: realizacja”, „sh: przegląd co godzinę”) | nazwy `sw: …` |
+| Skrypty | `~/sh-skills/bin/sh-notify`, `sh-sweep-gate` | `sw-*` w katalogu klonu `swarm-of-agents`, np. `sw-notify`, `sw-sweep-gate` |
+| Katalog na VPS | `~/sh-skills` | osobny katalog klonu `swarm-of-agents` |
+| Repozytorium sterujące przeglądem | `sh-control` | osobne (nie `sh-control`) |
+| Etykiety własne systemu | `sh-architekt`, `sh-posprzatane` | `sw-*`, np. `sw-architekt`, `sw-posprzatane` |
+| Rozpoznanie projektów przez przegląd | repozytoria z `.ai/cezar/workflows/sh-delivery.yml` | repozytoria z plikiem workflow `sw-*` |
+
+Zasady:
+- Instalacja i konfiguracja elementów `sw-*` nie zmienia, nie wyłącza i nie usuwa elementów `sh-*`; aktualizacja „po nazwie” dotyczy tylko nazw z prefiksem `sw`.
+- Przegląd `sw-*` obsługuje tylko projekty `sw-*`, a przegląd `sh-*` nadal tylko projekty `sh-*`. Projekt nie jest obsługiwany przez oba naraz.
+- Wyjątek etapu 1: po zmergowaniu specyfikacji projekt jest przekazywany łańcuchowi `sh-*` (dostaje konfigurację `sh-*`) i od tej chwili obsługuje go tylko przegląd `sh-*`.
+- Skille `sw-*` wywołują tylko skille `sw-*` i `om-*` z Open Mercato, poza przekazaniem z etapu 1.
+- Etykiety ogólne (`spec`, `ready`, `blocked` itd.) mogą się powtarzać, bo każdy projekt należy do jednego systemu.
 
 **Kryteria akceptacji**
-- Zakładając zainstalowane skille `sh-*`, gdy instaluję skille `sw-*`, wtedy lista skilli w Cezarze zawiera obie grupy, a pliki skilli `sh-*` są niezmienione.
-- Zakładając projekt w toku na łańcuchu sh-*, gdy instaluję skille `sw-*`, wtedy jego następne zadanie uruchamia skill `sh-*`.
-- Zakładając repozytorium `swarm-of-agents`, wtedy żaden katalog skilla, pole `name` ani nazwa workflow nie zaczyna się od `sh-`.
+- Zakładając zainstalowane skille, workflowy, automatyzacje i skrypty `sh-*`, gdy instaluję i konfiguruję `sw-*`, wtedy Cezar pokazuje obie grupy, a elementy `sh-*` mają niezmienioną treść, nazwy i stan (włączone albo wyłączone).
+- Zakładając projekt w toku na łańcuchu `sh-*`, gdy uruchamia się przegląd `sw-*`, wtedy nie podejmuje on w tym projekcie żadnej akcji.
+- Zakładając projekt `sw-*`, gdy uruchamia się przegląd `sh-*`, wtedy nie rozpoznaje go jako projektu zarządzanego.
+- Zakładając repozytorium `swarm-of-agents`, wtedy żaden katalog skilla, pole `name`, nazwa workflow, nazwa automatyzacji, nazwa skryptu ani etykieta własna systemu nie zaczyna się od `sh-` albo `sh:`.
 
 ### Języki
 - Komunikacja z właścicielem, karty pomysłów i specyfikacje po polsku.
