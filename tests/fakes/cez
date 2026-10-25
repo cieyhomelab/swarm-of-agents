@@ -2,7 +2,8 @@
 # Fake `cez automation` CLI for tests (use it through SW_CEZ). Supports
 # `automation list`, `automation create --file F [--enable]` and
 # `automation update ID --file F`, forwarding to the mock Cezar API at
-# $SW_CEZAR_URL. Everything else, including delete, fails.
+# $SW_CEZAR_URL under /cez/p/$CEZ_PROJECT_ID (like the real CLI, the project
+# comes only from CEZ_PROJECT_ID). Everything else, including delete, fails.
 set -euo pipefail
 
 [ "${1:-}" = "automation" ] || { echo "fake cez: unsupported command: $*" >&2; exit 2; }
@@ -23,7 +24,8 @@ while [ $# -gt 0 ]; do
 done
 
 : "${SW_CEZAR_URL:?fake cez: SW_CEZAR_URL not set}"
-base="$SW_CEZAR_URL/cez/automations"
+: "${CEZ_PROJECT_ID:?fake cez: CEZ_PROJECT_ID not set}"
+base="$SW_CEZAR_URL/cez/p/$CEZ_PROJECT_ID/automations"
 post() { curl -fsS -X POST -H 'Content-Type: application/json' --data-binary @- "$1"; }
 
 case "$sub" in

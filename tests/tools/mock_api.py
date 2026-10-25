@@ -5,8 +5,8 @@ Routes:
   GET  /api/v1/health             Cezar health (healthResponseSchema subset)
   GET  /api/v1/workspace/config   Cezar workspace config (resources.maxParallel)
   POST /api/v1/projects/create    Cezar project + private repository {name, github:{owner}}
-  GET  /cez/automations           Cezar automations (what `cez automation list` reads)
-  POST /cez/automations[/<id>]    create / update an automation definition
+  GET  /cez/p/<project>/automations           automations of one project (what `cez automation list` reads)
+  POST /cez/p/<project>/automations[/<id>]    create / update an automation definition in that project
   GET  /github/<path>             GitHub REST, from the in-memory state
   POST /github/<path>             GitHub REST writes: labels, issues (create)
   PUT  /github/<path>             GitHub REST writes: repository contents
@@ -24,6 +24,7 @@ import argparse
 import base64
 import copy
 import json
+import re
 from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -33,12 +34,13 @@ DEFAULTS = {
     "control_repo": "cieyhomelab/sw-control",
     "control_private": True,
     "max_parallel": 3,
+    "hide_project": False,
     "labels": [],
     "issues": [],
     "contents": {},
     "automations": [
-        {"id": "a1b2c3d4-0001", "name": "sh: architekt", "enabled": True},
-        {"id": "a1b2c3d4-0002", "name": "sh: realizacja", "enabled": True},
+        {"id": "a1b2c3d4-0001", "name": "sh: architekt", "enabled": True, "project": "swarm-of-agents"},
+        {"id": "a1b2c3d4-0002", "name": "sh: realizacja", "enabled": True, "project": "swarm-of-agents"},
     ],
 }
 STATE = copy.deepcopy(DEFAULTS)
@@ -63,7 +65,10 @@ class Handler(BaseHTTPRequestHandler):
             status = STATE["health_status"]
             if status != 200:
                 return self._send(status, {"error": "unavailable"})
-            return self._send(200, {"version": "0.0.0-mock", "projects": [], "bootProject": "mock"})
+            projects = [{"id": "swarm-of-agents", "name": "swarm-of-agents"}]
+            if STATE["control_private"] is not None and not STATE["hide_project"]:
+                projects.append({"id": "proj-sw-control", "name": STATE["control_repo"].split("/")[1]})
+            return self._send(200, {"version": "0.0.0-mock", "projects": projects, "bootProject": "mock"})
         if self.path == "/api/v1/workspace/config":
             return self._send(200, {"resources": {"maxParallel": STATE["max_parallel"]}})
         if self.path == "/__requests":
@@ -76,8 +81,9 @@ class Handler(BaseHTTPRequestHandler):
             if STATE["control_private"] is None:
                 return self._send(404, {"message": "Not Found"})
             return self._send(200, {"full_name": STATE["control_repo"], "private": STATE["control_private"]})
-        if self.path == "/cez/automations":
-            return self._send(200, STATE["automations"])
+        automations = re.fullmatch(r"/cez/p/([^/]+)/automations", self.path)
+        if automations:
+            return self._send(200, [a for a in STATE["automations"] if a.get("project") == automations[1]])
         url = urlsplit(self.path)
         repo_prefix = f"/github/repos/{STATE['control_repo']}/"
         if url.path.startswith(repo_prefix) and STATE["control_private"] is not None:
@@ -109,18 +115,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/v1/projects/create":
             body = json.loads(raw)
             STATE["control_private"] = True
-            return self._send(200, {"id": body["name"], "name": body["name"]})
-        if self.path == "/cez/automations":
+            return self._send(200, {"id": "proj-" + body["name"], "name": body["name"]})
+        created = re.fullmatch(r"/cez/p/([^/]+)/automations", self.path)
+        if created:
             definition = json.loads(raw)
+            definition["project"] = created[1]
             definition["id"] = f"auto-{len(STATE['automations']) + 1:04d}"
             STATE["automations"].append(definition)
             return self._send(200, {"id": definition["id"]})
-        if self.path.startswith("/cez/automations/"):
-            auto_id = self.path.rsplit("/", 1)[1]
+        changed = re.fullmatch(r"/cez/p/([^/]+)/automations/([^/]+)", self.path)
+        if changed:
+            auto_id = changed[2]
             for index, item in enumerate(STATE["automations"]):
-                if item["id"] == auto_id:
+                if item["id"] == auto_id and item.get("project") == changed[1]:
                     updated = json.loads(raw)
-                    updated.update({"id": auto_id, "enabled": item.get("enabled", False)})
+                    updated.update({"id": auto_id, "enabled": item.get("enabled", False), "project": changed[1]})
                     STATE["automations"][index] = updated
                     return self._send(200, {"id": auto_id})
             return self._send(404, {"message": "Not Found"})

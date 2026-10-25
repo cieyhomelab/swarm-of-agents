@@ -89,3 +89,21 @@ state() { curl -fsS -X POST -d '{}' "$SW_CEZAR_URL/__control"; }
   [ "$status" -eq 1 ]
   [[ "$output" == *"gh nie jest zalogowany"* ]]
 }
+
+@test "automation is installed in the sw-control project, not in the caller's" {
+  export CEZ_PROJECT_ID=swarm-of-agents
+  control '{"control_private": null}'
+  run "$ROOT/bin/sw-start"
+  [ "$status" -eq 0 ]
+  s="$(state)"
+  [ "$(jq -r '.automations[] | select(.name == "sw: przegląd co godzinę") | .project' <<<"$s")" = "proj-sw-control" ]
+  [ "$(jq '[.automations[] | select(.project == "swarm-of-agents")] | length' <<<"$s")" -eq 2 ]
+  [ "$(requests | jq '[.[] | select(.path | startswith("/cez/p/swarm-of-agents/")) | select(.method == "POST")] | length')" -eq 0 ]
+}
+
+@test "unregistered sw-control project stops the setup" {
+  control '{"hide_project": true}'
+  run "$ROOT/bin/sw-start"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STAN: BLAD"*"nie jest zarejestrowany"* ]]
+}

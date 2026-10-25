@@ -11,9 +11,9 @@
 # what is missing or different, so a second run changes nothing. Only objects
 # named sw-* / "sw: ..." are touched; no automation is ever deleted.
 #
-# Environment: SW_CEZ (command replacing `node "$CEZ_BIN"`, used by tests),
-# SW_CONTROL_DIR (local directory of the sw-control project, working
-# directory of the automation commands).
+# Environment: SW_CEZ (command replacing `node "$CEZ_BIN"`, used by tests).
+# `cez automation` picks its project only from CEZ_PROJECT_ID, so the id of
+# the sw-control project is resolved from Cezar and set for those commands.
 set -uo pipefail
 
 # shellcheck source=bin/lib/common.sh
@@ -50,11 +50,16 @@ private="$(gh api "repos/$repo" --jq .private 2>/dev/null)" || private=missing
 if [ "$private" = missing ]; then
   info "tworze prywatne repozytorium $repo"
   payload="$(jq -n --arg n "$name" --arg o "$owner" '{name: $n, github: {owner: $o}}')"
-  curl -fsS --max-time 120 -X POST -H 'Content-Type: application/json' -d "$payload" \
+  curl -fsS --max-time 600 -X POST -H 'Content-Type: application/json' -d "$payload" \
     "$SW_CEZAR_URL/api/v1/projects/create" >/dev/null || fail "Cezar nie utworzyl projektu $name"
   private="$(gh api "repos/$repo" --jq .private 2>/dev/null)" || fail "repozytorium $repo nie istnieje po utworzeniu"
 fi
 [ "$private" = true ] || fail "repozytorium sterujace $repo nie jest prywatne"
+
+# Cezar project id of sw-control (registered by projects/create or earlier).
+project_id="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null \
+  | jq -r --arg n "$name" '[.projects[]? | select(.name == $n) | .id][0] // empty' 2>/dev/null)" || project_id=""
+[ -n "$project_id" ] || fail "projekt $name nie jest zarejestrowany w Cezarze ($SW_CEZAR_URL)"
 
 # 2. Labels: only the missing ones.
 labels_file="$SW_ROOT/config/labels.json"
@@ -103,9 +108,8 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 jq --argjson e "$every" '.schedule.every = $e' "$def" > "$tmp"
 
-if [ -n "${SW_CONTROL_DIR:-}" ]; then
-  cd "$SW_CONTROL_DIR" || fail "brak katalogu $SW_CONTROL_DIR"
-fi
+export CEZ_PROJECT_ID="$project_id"
+export CEZ_API_URL="${CEZ_API_URL:-$SW_CEZAR_URL}"
 list="$(cez automation list)" || fail "cez automation list nie powiodlo sie"
 auto_id=""
 while IFS= read -r line; do
