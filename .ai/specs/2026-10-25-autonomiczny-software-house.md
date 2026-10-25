@@ -40,7 +40,7 @@ Cel: jedna interakcja właściciela na aplikację (ocena pomysłu), reszta w pe�
 | Reviewer | Recenzuje zmiany; inny model niż autor zmiany. |
 | Przegląd bezpieczeństwa | Osobny agent; inny model niż autor zmiany. Sprawdza PR przed merge i aplikację przed wdrożeniem. |
 
-Analityk, architekt, kierownik, inżynier, tester i reviewer to obecne role sh-* rozwijane w tym repozytorium, bez bramek ludzkich. Generator, integrator i przegląd bezpieczeństwa to nowe role.
+Analityk, architekt, kierownik, inżynier, tester i reviewer to obecne role sh-* przeniesione do tego repozytorium jako skille z prefiksem `sw-` (np. `sw-analityk`), bez bramek ludzkich. Generator, integrator i przegląd bezpieczeństwa to nowe role, też z prefiksem `sw-`.
 
 ## Scenariusze
 
@@ -255,6 +255,33 @@ Wymagania właściciela (istniejąca infrastruktura):
 - Równoległość ograniczona konfigurowalnym limitem agentów (start: 3), bo wszyscy agenci i czat właściciela dzielą limity jednego planu Claude Max, a zadania dzielą zasoby VPS.
 - Stan systemu jest trwały: po restarcie orkiestratora praca wznawia się od ostatniego zapisanego stanu.
 
+### Współistnienie z sh-skills
+Wymaganie właściciela: skille, workflowy, automatyzacje i skrypty tego systemu działają na tym samym VPS i w tym samym Cezarze co sh-skills, nie nadpisując ich i nie przejmując ich projektów.
+
+| Element | sh-skills (zostaje bez zmian) | swarm-of-agents |
+|---------|-------------------------------|-----------------|
+| Skille | `sh-*` (np. `sh-analityk`) | `sw-*` (katalog skilla i pole `name` w SKILL.md, np. `sw-analityk`) |
+| Workflowy Cezara | `sh-delivery`, `sh-sweep` (plik i pole `name`) | `sw-*`, np. `sw-delivery`, `sw-sweep` |
+| Automatyzacje Cezara | nazwy `sh: …` (np. „sh: realizacja”, „sh: przegląd co godzinę”) | nazwy `sw: …` |
+| Skrypty | `~/sh-skills/bin/sh-notify`, `sh-sweep-gate` | `sw-*` w katalogu klonu `swarm-of-agents`, np. `sw-notify`, `sw-sweep-gate` |
+| Katalog na VPS | `~/sh-skills` | osobny katalog klonu `swarm-of-agents` |
+| Repozytorium sterujące przeglądem | `sh-control` | osobne (nie `sh-control`) |
+| Etykiety własne systemu | `sh-architekt`, `sh-posprzatane` | `sw-*`, np. `sw-architekt`, `sw-posprzatane` |
+| Rozpoznanie projektów przez przegląd | repozytoria z `.ai/cezar/workflows/sh-delivery.yml` | repozytoria z plikiem workflow `sw-*` |
+
+Zasady:
+- Instalacja i konfiguracja elementów `sw-*` nie zmienia, nie wyłącza i nie usuwa elementów `sh-*`; aktualizacja „po nazwie” dotyczy tylko nazw z prefiksem `sw`.
+- Przegląd `sw-*` obsługuje tylko projekty `sw-*`, a przegląd `sh-*` nadal tylko projekty `sh-*`. Projekt nie jest obsługiwany przez oba naraz.
+- Wyjątek etapu 1: po zmergowaniu specyfikacji projekt jest przekazywany łańcuchowi `sh-*` (dostaje konfigurację `sh-*`) i od tej chwili obsługuje go tylko przegląd `sh-*`.
+- Skille `sw-*` wywołują tylko skille `sw-*` i `om-*` z Open Mercato, poza przekazaniem z etapu 1.
+- Etykiety ogólne (`spec`, `ready`, `blocked` itd.) mogą się powtarzać, bo każdy projekt należy do jednego systemu.
+
+**Kryteria akceptacji**
+- Zakładając zainstalowane skille, workflowy, automatyzacje i skrypty `sh-*`, gdy instaluję i konfiguruję `sw-*`, wtedy Cezar pokazuje obie grupy, a elementy `sh-*` mają niezmienioną treść, nazwy i stan (włączone albo wyłączone).
+- Zakładając projekt w toku na łańcuchu `sh-*`, gdy uruchamia się przegląd `sw-*`, wtedy nie podejmuje on w tym projekcie żadnej akcji.
+- Zakładając projekt `sw-*`, gdy uruchamia się przegląd `sh-*`, wtedy nie rozpoznaje go jako projektu zarządzanego.
+- Zakładając repozytorium `swarm-of-agents`, wtedy żaden katalog skilla, pole `name`, nazwa workflow, nazwa automatyzacji, nazwa skryptu ani etykieta własna systemu nie zaczyna się od `sh-` albo `sh:`.
+
 ### Języki
 - Komunikacja z właścicielem, karty pomysłów i specyfikacje po polsku.
 
@@ -286,7 +313,7 @@ Wymagania właściciela (istniejąca infrastruktura):
 3. **Praca równoległa modułami:** wiele modułów z kontraktami, równoległa implementacja do limitu agentów, integracja. Scenariusze: S5 (wiele modułów), S6, S7 (integracja).
 
 ## Założenia
-- **Migracja:** `swarm-of-agents` przejmuje skille i workflowy z sh-skills oraz konfigurację z sh-control; stare repozytoria są archiwizowane po uruchomieniu etapu 1. Analityk potrzebuje wariantu autonomicznego. Uzasadnienie: decyzja właściciela, jedno źródło prawdy; migracja to osobne zadanie, nie scenariusz systemu.
+- **Migracja:** `swarm-of-agents` przejmuje skille i workflowy z sh-skills oraz konfigurację z sh-control; skille dostają prefiks `sw-` i działają obok `sh-*`; stare repozytoria są archiwizowane po uruchomieniu etapu 2, bo do tego czasu etap 1 przekazuje budowę łańcuchowi sh-*. Analityk potrzebuje wariantu autonomicznego. Uzasadnienie: decyzja właściciela, jedno źródło prawdy; migracja to osobne zadanie, nie scenariusz systemu.
 - **Etap 1 kończy się na specyfikacji:** generator rusza po zmergowaniu specyfikacji, bo w etapie 1 nie ma jeszcze stanów „wdrożony” i „wstrzymany”. Uzasadnienie: etap 1 działa samodzielnie; zasada jednego projektu obowiązuje od etapu 2.
 - **Ponowienia i rundy:** 2 ponowienia na zadanie, 3 rundy poprawek na PR, 2 rundy poprawek specyfikacji; wartości w konfiguracji. Uzasadnienie: najprostsze i łatwe do zmiany.
 - **Brak postępu = 3 godziny:** ten sam próg co dotychczasowy próg utknięcia PR w sh-kierownik.
