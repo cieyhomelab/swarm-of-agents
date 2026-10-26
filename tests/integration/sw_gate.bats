@@ -122,3 +122,8 @@ decision() { run "$ROOT/bin/sw-gate"; echo "$output" | grep '^URUCHOM:'; }
   control '{"runs": "oops"}'
   [ "$(decision)" = "URUCHOM: NIC" ]
 }
+
+@test "a paused project is not active even when it still carries another state label" {
+  state "[$(issue 3 '{}' sw-stan-wstrzymany sw-zatwierdzony)]"
+  [ "$(decision)" = "URUCHOM: GENERATOR" ]
+}

@@ -135,6 +135,7 @@ issues="$(printf '%s' "$issues" | jq -c '
   [.[]? | select(.pull_request == null)
         | {number, labels: [.labels[].name],
            meta: ((.body // "") | capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {}))}
+        | select(any(.labels[]; . == "sw-stan-wstrzymany") | not)
         | select(any(.labels[]; . == "sw-w-ocenie" or . == "sw-zatwierdzony"
               or (startswith("sw-stan-") and . != "sw-stan-wdrozony" and . != "sw-stan-wstrzymany")))]' 2>/dev/null)" \
   || undecided "niepoprawna lista issues"

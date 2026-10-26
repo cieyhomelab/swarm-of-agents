@@ -17,7 +17,11 @@ setup() {
   export CEZ_PROJECT_ID=proj SW_SPEC_REPO=cieyhomelab/app SW_SPEC_BRANCH=spec
   export FAKE_GH_API_URL="$MOCK_URL" IDEA=7 CALLS="$WORK/calls" REVIEWS="$WORK/reviews"
   : > "$CALLS"
+  printf '# Planer\n\nPomysł i jego ocena: https://github.com/cieyhomelab/sw-control/issues/7\n' > README.md
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
+    "issues": [{"number": 1, "state": "open", "title": "sw-dziennik", "labels": [{"name": "sw-dziennik"}]},
+               {"number": 7, "state": "open", "title": "Planer posiłków", "labels": [{"name": "sw-pomysl"}, {"name": "sw-stan-specyfikacja"}],
+                "body": "## Problem i dla kogo\nx\n\n<!-- sw:meta {\"repo\":\"cieyhomelab/app\",\"projectId\":\"proj\"} -->"}],
     "pulls": {"cieyhomelab/app#3": {"head_sha": "abc1234", "branch": "spec", "draft": true, "body": "Specyfikacja"}},
     "runs": [{"project": "proj", "id": "analyst", "modelIdentity": "anthropic/opus[1m]"},
              {"project": "proj", "id": "review", "modelIdentity": "anthropic/sonnet[1m]"},
@@ -104,19 +108,50 @@ called() { grep -c "^$1\$" "$CALLS" || true; }
   [ "$(pr | jq .merged)" = "true" ]
 }
 
-@test "S4 remarks after specFixRounds rounds leave the PR unmerged and notify nobody" {
+idea() { state | jq -c '.issues[] | select(.number == 7)'; }
+paused() { # the idea is paused: label, pauseReason in the metadata, closed
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
+  [ "$(idea | jq -r .state)" = "closed" ]
+  meta="$(idea | jq -r .body | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -r .repo <<<"$meta")" = "cieyhomelab/app" ]
+  [[ "$(jq -r .pauseReason <<<"$meta")" == *"$1"*"https://github.com/cieyhomelab/app/pull/3"* ]]
+}
+
+@test "S4 remarks after specFixRounds rounds pause the project and notify the owner once" {
   rounds="$(jq -r .specFixRounds "$home/config/sw.json")"
   reviews uwagi uwagi uwagi uwagi
   spec
   [ "$status" -eq 0 ]
   [[ "$output" == *"TRACE rounds exhausted"* ]]
+  [[ "$output" == *"TRACE pause-rounds pass"* ]]
   [[ "$output" == *"END stopped success"* ]]
   [ "$(called fix)" -eq "$rounds" ]
   [ "$(called review)" -eq $((rounds + 1)) ]
   [ "$(called security)" -eq 0 ]
   [ "$(pr | jq .merged)" = "false" ]
   [ "$(pr | jq .draft)" = "true" ]
-  [ "$(pushes)" = "[]" ]
+  paused "uwagi do specyfikacji po wyczerpaniu rund"
+  # the owner gets one "blocked" notification: the reason, a link to the idea, no questions
+  [ "$(pushes | jq length)" -eq 1 ]
+  [ "$(pushes | jq -c '.[0].body | {gate, repo, number, url}')" \
+    = '{"gate":"blocked","repo":"cieyhomelab/sw-control","number":7,"url":"https://github.com/cieyhomelab/sw-control/issues/7"}' ]
+  [[ "$(pushes | jq -r '.[0].body.title')" == "Projekt wstrzymany: "*"uwagi"* ]]
+  [[ "$(state | jq -r '.comments["1"][]?.body')" == *"wstrzymanie: pomysł #7"* ]]
+}
+
+@test "S4 after the pause the next cycle returns GENERATOR and the agents do not work in the project" {
+  reviews uwagi uwagi uwagi uwagi
+  spec
+  [ "$status" -eq 0 ]
+  paused "uwagi"
+  fixes="$(called fix)"
+  run env SW_CEZAR_URL="$MOCK_URL" CEZ_PROJECT_ID=proj bash "$home/bin/sw-gate"
+  [[ "$output" == *"URUCHOM: GENERATOR"* ]]
+  # a repeated pause changes nothing and sends no second notification
+  run bash "$home/bin/sw-spec-pause" "uwagi"
+  [ "$output" = "WYNIK: POMINIETO issue 7 nie jest aktywnym pomyslem" ]
+  [ "$(pushes | jq length)" -eq 1 ]
+  [ "$(called fix)" -eq "$fixes" ]
 }
 
 @test "S4 a failed security review of the specification blocks the merge" {
@@ -134,10 +169,13 @@ AGENT
   chmod +x "$WORK/agent2"; MOCK_AGENT="$WORK/agent2" spec
   [ "$status" -eq 0 ]
   [[ "$output" == *"TRACE security fail"* ]]
+  [[ "$output" == *"TRACE pause-security pass"* ]]
   [[ "$output" == *"END stopped success"* ]]
   [ "$(pr | jq .merged)" = "false" ]
   [ "$(pr | jq .draft)" = "true" ]
-  [ "$(pushes)" = "[]" ]
+  paused "przegląd bezpieczeństwa"
+  [ "$(pushes | jq length)" -eq 1 ]
+  [ "$(pushes | jq -r '.[0].body.gate')" = "blocked" ]
 }
 
 @test "S4 a push after the verdicts (another head SHA) blocks the merge" {
