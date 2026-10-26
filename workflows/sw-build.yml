@@ -34,6 +34,13 @@
 #    file for every item); remarks start a fix round of the engineer (rounds-mod). Then the
 #    same pipeline as for the architecture: sw-recenzent, github.wait-ci, sw-bezpieczenstwo,
 #    sw-merge kod (rounds-mod and pause-security-mod).
+# 5b. Integration (S7, stage 3): sw-stan-integracja, then bin/sw-integracja gotowe creates the
+#    integration task only when every module issue is sw-modul-zmergowany. sw-integrator (model
+#    integrator) assembles the merged modules into the running application: "zlozona" goes
+#    through a NEW PR (review, CI, security, merge), "bez-zmian" straight on (once-integ: the
+#    first assembly happens once). bin/sw-integracja spojnosc then checks conflict markers and
+#    the Wymaga/Udostępnia fit of the contracts; a conflict starts a fix round of the integrator
+#    (rounds-integ, fixRoundsPerPr, its fix through a NEW PR), exhausted rounds pause the project.
 # 6. Tests of the whole application (S7): sw-stan-integracja, bin/sw-pokrycie-check e2e (every
 #    scenario of the specification named in a test of tests/e2e, none skipped), the real run of
 #    scripts/test-e2e.sh, sw-tester judging whether the tests check the criteria. A failure or
@@ -457,6 +464,93 @@ nodes:
     name: Stan projektu - integracja
     command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-stan" implementacja integracja
 
+  - id: integ-ready
+    type: check
+    name: Wszystkie moduły zmergowane (zadanie integracji)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-integracja" gotowe
+
+  - id: once-integ
+    type: loop
+    name: Pierwsze złożenie modułów najwyżej raz
+    max: 1
+
+  - id: limits-integrator
+    type: check
+    name: Limity projektu (przed integratorem)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: integrator
+    type: agent
+    name: Integrator (złożenie zmergowanych modułów w aplikację)
+    skill: sw-integrator
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-integrator i pracuj w trybie integracja: wszystkie moduły są zmergowane,
+      złóż je w działającą aplikację. Zmiany trafią do nowego PR, który przechodzi recenzję,
+      CI i przegląd bezpieczeństwa.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr checks *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+      - "bash bin/sw-integracja *"
+    verdicts: [zlozona, bez-zmian]
+
+  - id: integ-check
+    type: check
+    name: Spójność modułów (konflikty, kontrakty Wymaga i Udostępnia)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-integracja" spojnosc
+
+  - id: rounds-integ
+    type: loop
+    name: Rundy poprawek po konflikcie modułów
+    max: 3
+
+  - id: limits-fix-integ
+    type: check
+    name: Limity projektu (przed poprawką integracji)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: fix-integ
+    type: agent
+    name: Integrator (poprawka po konflikcie modułów)
+    skill: sw-integrator
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-integrator i pracuj w trybie poprawka: konflikt modułów albo rozbieżność
+      kontraktów (runda poprawek {{nodes.rounds-integ.iteration}} z {{nodes.rounds-integ.max}}).
+      Uwagi są w .ai/sw-run/uwagi.md. Poprawka trafia do nowego PR, który przechodzi recenzję, CI
+      i przegląd bezpieczeństwa.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr checks *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+      - "bash bin/sw-integracja *"
+    verdicts: [gotowa]
+
   - id: limits-test
     type: check
     name: Limity projektu (przed testami E2E)
@@ -663,6 +757,12 @@ nodes:
     command: |
       bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'testy E2E aplikacji: porażki albo brak pokrycia po wyczerpaniu rund poprawek'
 
+  - id: pause-rounds-integ
+    type: check
+    name: Wstrzymanie projektu po wyczerpaniu rund poprawek po konflikcie modułów
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'integracja modułów: konflikt po wyczerpaniu rund poprawek'
+
   - id: state-deploy
     type: check
     name: Stan projektu - wdrażanie
@@ -820,7 +920,26 @@ edges:
   - { from: kierownik-merged.fail, to: stopped }
   - { from: merge-mod.fail, to: stopped }
 
-  - { from: state-integ.pass, to: limits-test }
+  - { from: state-integ.pass, to: integ-ready }
+  - { from: integ-ready.pass, to: once-integ }
+  - { from: integ-ready.fail, to: stopped }
+  - { from: once-integ.repeat, to: limits-integrator }
+  - { from: once-integ.exhausted, to: integ-check }
+  - { from: limits-integrator.pass, to: integrator }
+  - { from: limits-integrator.fail, to: stopped }
+  - { from: integrator.zlozona, to: commit-mod }
+  - { from: integrator.bez-zmian, to: integ-check }
+  - { from: integrator.failed, to: stopped }
+  - { from: integ-check.pass, to: limits-test }
+  - { from: integ-check.fail, to: rounds-integ }
+  - { from: rounds-integ.repeat, to: limits-fix-integ }
+  - { from: rounds-integ.exhausted, to: pause-rounds-integ }
+  - { from: limits-fix-integ.pass, to: fix-integ }
+  - { from: limits-fix-integ.fail, to: stopped }
+  - { from: fix-integ.gotowa, to: commit-mod }
+  - { from: fix-integ.failed, to: stopped }
+  - { from: pause-rounds-integ.pass, to: stopped }
+  - { from: pause-rounds-integ.fail, to: stopped }
   - { from: state-integ.fail, to: stopped }
   - { from: limits-test.pass, to: e2e-check }
   - { from: limits-test.fail, to: stopped }

@@ -16,8 +16,8 @@ setup() {
   SW_PUSH_TOKEN_FILE="$WORK/token"; echo test-token > "$SW_PUSH_TOKEN_FILE"; export SW_PUSH_TOKEN_FILE
   export CEZ_PROJECT_ID=proj SW_SPEC_REPO=cieyhomelab/app SW_SPEC_BRANCH=build
   export FAKE_GH_API_URL="$MOCK_URL" CALLS="$WORK/calls" REVIEWS="$WORK/reviews" CIS="$WORK/cis" BREAK="$WORK/break"
-  export MULTI="$WORK/multi" BREAKE2E="$WORK/breake2e" FAILE2E="$WORK/faile2e" TESTERS="$WORK/testers" LEAK="$WORK/leak" STUCK="$WORK/stuck" MOCK_URL
-  : > "$MULTI"; : > "$CALLS"; : > "$CIS"; : > "$BREAK"; : > "$BREAKE2E"; : > "$FAILE2E"; : > "$LEAK"; : > "$STUCK"; echo pass > "$TESTERS"
+  export INTEG="$WORK/integ" MULTI="$WORK/multi" BREAKE2E="$WORK/breake2e" FAILE2E="$WORK/faile2e" TESTERS="$WORK/testers" LEAK="$WORK/leak" STUCK="$WORK/stuck" MOCK_URL
+  : > "$INTEG"; : > "$MULTI"; : > "$CALLS"; : > "$CIS"; : > "$BREAK"; : > "$BREAKE2E"; : > "$FAILE2E"; : > "$LEAK"; : > "$STUCK"; echo pass > "$TESTERS"
   printf '# Planer\n\nPomysł i jego ocena: https://github.com/cieyhomelab/sw-control/issues/7\n' > README.md
   printf '# Planer\n\n### S1: Menu\n- Zakładając tydzień, wtedy lista zakupów.\n\n### S2: Lista\n- Zakładając menu, wtedy lista.\n\n## Założenia\n- Język polski.\n' > .ai/specs/spec.md
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
@@ -96,6 +96,21 @@ case "$1" in
     elif [ -e src/trasy.txt ] && grep -q 'rejestracja' src/trasy.txt; then bad=4; fi
     jq -n --argjson bad "$bad" '{punkty: [range(1; 5) | {punkt: ., wynik: (if . == $bad then "fail" else "pass" end), uzasadnienie: "sprawdzono punkt \(.)"}]}' > .ai/sw-run/przeglad.json
     if [ "$bad" -eq 0 ]; then echo pass; else echo fail; fi ;;
+  integrator | fix-integ)
+    # the integration (S7, stage 3): $INTEG holds "zmiana" (the integrator assembles the modules in a new PR)
+    # or "konflikt" (it leaves merge-conflict markers; fix-integ resolves them unless $STUCK holds a line)
+    mode="$(cat "$INTEG")"
+    mkdir -p src
+    if [ "$1" = integrator ]; then
+      case "$mode" in
+        zmiana) echo 'echo zlozona aplikacja' > src/aplikacja.sh; echo zlozona ;;
+        konflikt) printf '<<<<<<< HEAD\nmenu\n=======\nzakupy\n>>>>>>> zakupy\n' > src/konflikt.txt; echo zlozona ;;
+        *) echo bez-zmian ;;
+      esac
+    else
+      if [ ! -s "$STUCK" ]; then rm -f src/konflikt.txt; else echo "$1 $(date +%N)" > "src/rev-$1"; fi
+      echo gotowa
+    fi ;;
   tester)
     verdict="$(head -1 "$TESTERS")"; sed -i 1d "$TESTERS"
     [ "$verdict" = fail ] && echo "1. S2: test nie sprawdza skutku." > .ai/sw-run/uwagi.md
@@ -571,3 +586,50 @@ print(next(n for n in doc["nodes"] if n["id"] == "handover")["command"])' "$home
   [[ "$output" == *"TRACE kierownik fail"* && "$output" == *"END stopped"* ]]
   [ "$(called engineer)" -eq 0 ]
 }
+
+@test "S7 all modules merged: the integration task is created, the project is in sw-stan-integracja and the integrator runs" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE state-integ pass"* && "$output" == *"TRACE integ-ready pass"* && "$output" == *"TRACE integrator bez-zmian"* ]]
+  [[ "$output" == *"TRACE integ-check pass"* && "$output" == *"TRACE tester pass"* && "$output" == *"END done success"* ]]
+  [ "$(called integrator)" -eq 1 ]
+  [ "$(called fix-integ)" -eq 0 ]
+}
+
+@test "S7 the integration goes through a new PR and the E2E of the whole application runs after it" {
+  echo zmiana > "$INTEG"
+  reviews approve approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE integrator zlozona"* && "$output" == *"TRACE once-integ exhausted"* && "$output" == *"TRACE integ-check pass"* ]]
+  [ "$(called integrator)" -eq 1 ]
+  [ "$(called review-mod)" -eq 3 ]
+  [[ "$output" == *"TRACE e2e-check pass"* && "$output" == *"TRACE tester pass"* && "$output" == *"END done success"* ]]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
+}
+
+@test "S7 a conflict of the modules starts a fix round of the integrator and the E2E wait for it" {
+  echo konflikt > "$INTEG"
+  reviews approve approve approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE integ-check fail"* && "$output" == *"TRACE rounds-integ repeat"* ]]
+  [ "$(called fix-integ)" -eq 1 ]
+  [[ "$output" == *"TRACE integ-check pass"* && "$output" == *"END done success"* ]]
+  # the E2E of the whole application ran only once, after the conflict was resolved
+  [ "$(grep -c 'TRACE e2e-run ' <<<"$output")" -eq 1 ]
+}
+
+@test "S7 fixRoundsPerPr rounds of an unresolved conflict of the modules pause the project" {
+  rounds="$(jq -r .fixRoundsPerPr "$home/config/sw.json")"
+  echo konflikt > "$INTEG"; echo stuck > "$STUCK"
+  reviews approve approve approve approve approve approve approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE rounds-integ exhausted"* && "$output" == *"TRACE pause-rounds-integ pass"* && "$output" == *"END stopped success"* ]]
+  [ "$(called fix-integ)" -eq "$rounds" ]
+  [[ "$output" != *"TRACE e2e-run "* ]]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
+}
+

@@ -461,3 +461,40 @@ multi_arch() {
   grep -q 'zmergowany' "$f"
   [ "$(jq -r .models.chores "$ROOT/config/sw.json")" = haiku ]
 }
+
+@test "S7 the integration step of sw-build: gate, once, integrator, coherence check, fix rounds and a pause" {
+  run python3 - "$WF" "$ROOT/config/sw.json" <<'PY'
+import json, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+cfg = json.load(open(sys.argv[2]))
+nodes = {n["id"]: n for n in doc["nodes"]}
+edges = {(e["from"], e["to"]) for e in doc["edges"]}
+assert nodes["rounds-integ"]["max"] == cfg["fixRoundsPerPr"]
+assert nodes["once-integ"]["max"] == 1
+assert "sw-integracja" in nodes["integ-ready"]["command"] and "gotowe" in nodes["integ-ready"]["command"]
+assert "sw-integracja" in nodes["integ-check"]["command"] and "spojnosc" in nodes["integ-check"]["command"]
+for n in ("integrator", "fix-integ"):
+    assert nodes[n]["skill"] == "sw-integrator" and nodes[n]["model"] == cfg["models"]["integrator"], n
+    assert nodes[n]["model"] != cfg["models"]["reviewer"], n
+for limits, agent in (("limits-integrator", "integrator"), ("limits-fix-integ", "fix-integ")):
+    assert "bin/sw-limits" in nodes[limits]["command"] and (f"{limits}.pass", agent) in edges and (f"{limits}.fail", "stopped") in edges
+assert ("state-integ.pass", "integ-ready") in edges and ("integ-ready.fail", "stopped") in edges
+assert ("integ-ready.pass", "once-integ") in edges and ("once-integ.repeat", "limits-integrator") in edges
+assert ("integrator.zlozona", "commit-mod") in edges and ("integrator.bez-zmian", "integ-check") in edges
+assert ("once-integ.exhausted", "integ-check") in edges
+assert ("integ-check.pass", "limits-test") in edges and ("integ-check.fail", "rounds-integ") in edges
+assert ("rounds-integ.exhausted", "pause-rounds-integ") in edges and ("fix-integ.gotowa", "commit-mod") in edges
+assert "sw-spec-pr" in nodes["pause-rounds-integ"]["command"] and "pause" in nodes["pause-rounds-integ"]["command"]
+print("ok")
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "S7 the sw-integrator skill names the model integrator, the gates and both verdict sets" {
+  f="$ROOT/skills/sw-integrator/SKILL.md"
+  [ "$(sed -n 's/^name:[[:space:]]*//p' "$f" | head -1)" = sw-integrator ]
+  for s in integrator 'sw-integracja' 'sw-modul-zmergowany' zlozona bez-zmian gotowa; do
+    grep -qF -- "$s" "$f" || { echo "missing: $s"; return 1; }
+  done
+  [ "$(jq -r .models.integrator "$ROOT/config/sw.json")" = opus ]
+}

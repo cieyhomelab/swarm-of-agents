@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# sw-integracja gotowe | spojnosc — the deterministic gates of the integration of the modules (spec S7, stage 3):
+#   gotowe     every module of the application is merged: the issues "Moduł: <modul>" (sw-kierownik stan) are all
+#              sw-modul-zmergowany, none waits or is in work, and there is at least one. Only then the integration task
+#              (the integrator of sw-build) is created.
+#   spojnosc   the working directory has no merge-conflict markers and every "- <modul>: <pozycja>" of "## Wymaga" of a
+#              contract is listed in "## Udostępnia" of docs/kontrakty/<modul>.md (the modules fit together). Problems go
+#              to .ai/sw-run/uwagi.md (the fix round of the integrator reads them) and after STAN: BLAD; exit 1.
+# Repository of "gotowe": see sw-kierownik (SW_SPEC_REPO overrides the origin of the checkout).
+#
+# Output: WYNIK: GOTOWE <n> | WYNIK: OK; STAN: BLAD <powód> with exit 1.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+case "${1:-}" in
+  gotowe | spojnosc) [ $# -eq 1 ] || sw_die "uzycie: sw-integracja gotowe | spojnosc" ;;
+  *) sw_die "uzycie: sw-integracja gotowe | spojnosc" ;;
+esac
+
+if [ "$1" = gotowe ]; then
+  out="$("$here/sw-kierownik" stan)" || { printf '%s\n' "$out"; exit 1; }
+  line="$(grep '^WYNIK: STAN ' <<<"$out" | tail -1)"
+  read -r todo working merged < <(sed -E 's/^WYNIK: STAN do-zrobienia ([0-9]+) w-pracy ([0-9]+) zmergowany ([0-9]+)$/\1 \2 \3/' <<<"$line")
+  [[ "$todo$working$merged" =~ ^[0-9]+$ ]] || fail "nie mozna odczytac stanu modulow"
+  if [ "$todo" -gt 0 ] || [ "$working" -gt 0 ] || [ "$merged" -eq 0 ]; then
+    fail "moduly nie sa zmergowane (do-zrobienia $todo, w-pracy $working, zmergowany $merged)"
+  fi
+  echo "WYNIK: GOTOWE $merged"
+  exit 0
+fi
+
+problems=""
+markers="$(grep -rInE --exclude-dir=.git --exclude-dir=.ai --exclude-dir=node_modules '^(<{7}|>{7})( |$)' . 2>/dev/null | head -20)"
+if [ -n "$markers" ]; then
+  problems+="Konflikt modułów: znaczniki konfliktu scalania w plikach (rozwiąż je z zachowaniem zmian obu modułów):"$'\n'
+  problems+="   ${markers//$'\n'/$'\n'   }"$'\n'
+fi
+for f in docs/kontrakty/*.md; do
+  [ -e "$f" ] || continue
+  m="$(basename "$f" .md)"
+  [ "${m,,}" = readme ] && continue
+  while IFS= read -r need; do
+    [ -n "$need" ] || continue
+    dep="${need%%:*}"; item="${need#*:}"
+    dep="$(sed -E 's/^ +| +$//g' <<<"$dep")"; item="$(sed -E 's/^ +| +$//g' <<<"$item")"
+    target="docs/kontrakty/$dep.md"
+    if [ ! -r "$target" ]; then
+      problems+="Moduł $m wymaga modułu $dep, który nie ma kontraktu ($target)."$'\n'
+    elif ! awk '/^## Udostępnia/ {f=1; next} /^## / {f=0} f && /^- / {sub(/^- /, ""); gsub(/^ +| +$/, ""); print}' "$target" | grep -qxF -- "$item"; then
+      problems+="Moduł $m wymaga \"$item\" od modułu $dep, a kontrakt $dep tego nie udostępnia."$'\n'
+    fi
+  done < <(awk '/^## Wymaga/ {f=1; next} /^## / {f=0} f && /^- / {sub(/^- /, ""); print}' "$f")
+done
+if [ -z "$problems" ]; then
+  echo "WYNIK: OK"
+  exit 0
+fi
+mkdir -p .ai/sw-run
+awk '{print}' <<<"$problems" > .ai/sw-run/uwagi.md
+echo "STAN: BLAD konflikt modulow"
+printf '%s' "$problems"
+exit 1
