@@ -5,11 +5,12 @@
 #
 #   sw-spec-pr sha                   WYNIK: SHA <head sha>   (captured before each review)
 #   sw-spec-pr pr-body [args]        sw-pr-body <repo> <pr> <assumptions file> [args]
-#   sw-spec-pr merge <sha-line> [args]  sw-merge <repo> <pr> spec --sha <sha> [args]
+#   sw-spec-pr merge <sha-line> [args]  sw-merge <repo> <pr> spec --sha <sha> --gotowy [args]
 #   sw-spec-pr notify                sw-notify spec <repo> <pr> <title> <url>
 #
 # <sha-line> is the output of the "sha" node ("WYNIK: SHA <sha>"); the merge uses the
-# commit that the reviewers judged, so a later push blocks it (sw-merge compares heads).
+# commit that the reviewers judged; --gotowy takes the draft PR out of draft just before
+# the merge, only when the conditions hold, so a later push blocks it (sw-merge compares heads).
 # The assumptions are the "## Założenia" section of the newest .ai/specs/*.md file.
 # Repository and branch come from the git checkout (origin, current branch);
 # SW_SPEC_REPO and SW_SPEC_BRANCH override them (tests).
@@ -69,7 +70,7 @@ case "$cmd" in
     [ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr merge <wiersz-sha> [argumenty sw-merge]"
     reviewed_sha="$(grep -oE '[0-9a-f]{7,40}' <<<"$1" | head -1)"; shift
     [ -n "$reviewed_sha" ] || fail "brak SHA ocenionej wersji"
-    exec "$here/sw-merge" "$repo" "$pr" spec --sha "$reviewed_sha" "$@"
+    exec "$here/sw-merge" "$repo" "$pr" spec --sha "$reviewed_sha" --gotowy "$@"
     ;;
   notify)
     name="${repo#*/}"

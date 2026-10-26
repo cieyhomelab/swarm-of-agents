@@ -18,7 +18,7 @@ setup() {
   export FAKE_GH_API_URL="$MOCK_URL" IDEA=7 CALLS="$WORK/calls" REVIEWS="$WORK/reviews"
   : > "$CALLS"
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
-    "pulls": {"cieyhomelab/app#3": {"head_sha": "abc1234", "branch": "spec", "body": "Specyfikacja"}},
+    "pulls": {"cieyhomelab/app#3": {"head_sha": "abc1234", "branch": "spec", "draft": true, "body": "Specyfikacja"}},
     "runs": [{"project": "proj", "id": "analyst", "modelIdentity": "anthropic/opus[1m]"},
              {"project": "proj", "id": "review", "modelIdentity": "anthropic/sonnet[1m]"},
              {"project": "proj", "id": "security", "modelIdentity": "anthropic/haiku[1m]"}],
@@ -46,7 +46,7 @@ case "$1" in
     echo "$verdict" ;;
   security)
     if [ -n "${PUSH_AFTER_VERDICT:-}" ]; then
-      curl -fsS -X POST "$MOCK_URL/__control" -d '{"pulls": {"cieyhomelab/app#3": {"head_sha": "def4567", "branch": "spec", "body": "x"}}}' >/dev/null
+      curl -fsS -X POST "$MOCK_URL/__control" -d '{"pulls": {"cieyhomelab/app#3": {"head_sha": "def4567", "branch": "spec", "draft": true, "body": "x"}}}' >/dev/null
     fi
     grep -q '@' "$spec" && echo fail || echo pass ;;
 esac
@@ -71,6 +71,8 @@ called() { grep -c "^$1\$" "$CALLS" || true; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"END done success"* ]]
   [ "$(pr | jq .merged)" = "true" ]
+  # the draft PR was taken out of draft before the merge (GitHub refuses to merge a draft)
+  [ "$(pr | jq .draft)" = "false" ]
   # the order of the work: commented requirements are checked before the analyst writes
   [ "$(sed -n 1,2p "$CALLS" | paste -sd,)" = "sec-ustalenia,analyst" ]
   [ "$(pushes | jq length)" -eq 1 ]
@@ -113,6 +115,7 @@ called() { grep -c "^$1\$" "$CALLS" || true; }
   [ "$(called review)" -eq $((rounds + 1)) ]
   [ "$(called security)" -eq 0 ]
   [ "$(pr | jq .merged)" = "false" ]
+  [ "$(pr | jq .draft)" = "true" ]
   [ "$(pushes)" = "[]" ]
 }
 
@@ -133,6 +136,7 @@ AGENT
   [[ "$output" == *"TRACE security fail"* ]]
   [[ "$output" == *"END stopped success"* ]]
   [ "$(pr | jq .merged)" = "false" ]
+  [ "$(pr | jq .draft)" = "true" ]
   [ "$(pushes)" = "[]" ]
 }
 
@@ -143,6 +147,7 @@ AGENT
   [[ "$output" == *"TRACE merge fail"* ]]
   [[ "$output" == *"END stopped success"* ]]
   [ "$(pr | jq .merged)" = "false" ]
+  [ "$(pr | jq .draft)" = "true" ]
   [ "$(pushes)" = "[]" ]
 }
 
@@ -156,6 +161,7 @@ AGENT
   [ "$status" -eq 0 ]
   [[ "$output" == *"TRACE merge fail"* ]]
   [ "$(pr | jq .merged)" = "false" ]
+  [ "$(pr | jq .draft)" = "true" ]
 }
 
 @test "S4 sw:ustalenia with personal data ends the task before the analyst uses it" {
@@ -167,4 +173,5 @@ AGENT
   [[ "$output" == *"END stopped success"* ]]
   [ "$(cat "$CALLS")" = "sec-ustalenia" ]
   [ "$(pr | jq .merged)" = "false" ]
+  [ "$(pr | jq .draft)" = "true" ]
 }

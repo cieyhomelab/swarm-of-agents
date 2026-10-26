@@ -29,10 +29,11 @@ Routes:
                                               {role: "user"|"assistant", text}); 404 for an unknown run
   GET  /github/repos/<control>/issues/<n>   one issue of the control repository
   PATCH /github/repos/<control>/issues/<n>  body / labels (list of names) / state of that issue
-  GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged})
+  GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged, draft})
   GET  /github/repos/<o>/<r>/pulls?head=<o>:<branch>&state=open|all   open (not merged) PRs whose state entry has
                                   that "branch" (state=all: merged ones too): [{number, html_url, head: {sha}}]
-  PUT  /github/repos/<o>/<r>/pulls/<n>/merge  409 unless body.sha equals the head sha
+  POST /github/repos/<o>/<r>/pulls/<n>/ready  takes the PR out of draft (gh pr ready)
+  PUT  /github/repos/<o>/<r>/pulls/<n>/merge  405 while the PR is a draft, 409 unless body.sha equals the head sha
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
@@ -117,7 +118,7 @@ class Handler(BaseHTTPRequestHandler):
                 if repo == listing[1] and item.get("branch") == branch \
                         and (query.get("state", ["open"])[0] == "all" or not item.get("merged", False)):
                     found.append({"number": int(number), "html_url": f"https://github.com/{repo}/pull/{number}",
-                                  "head": {"sha": item["head_sha"]}})
+                                  "draft": item.get("draft", False), "head": {"sha": item["head_sha"]}})
             return self._send(200, found)
         pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
         if pull:
@@ -125,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
             if item is None:
                 return self._send(404, {"message": "Not Found"})
             return self._send(200, {"number": int(pull[2]), "body": item.get("body", ""),
-                                    "merged": item.get("merged", False), "head": {"sha": item["head_sha"]}})
+                                    "merged": item.get("merged", False), "draft": item.get("draft", False), "head": {"sha": item["head_sha"]}})
         if self.path == "/__requests":
             return self._send(200, REQUESTS)
         if self.path == "/github/user":
@@ -203,6 +204,13 @@ class Handler(BaseHTTPRequestHandler):
                 REQUESTS.clear()
             STATE.update({k: v for k, v in update.items() if k != "reset"})
             return self._send(200, STATE)
+        ready = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)/ready", self.path)
+        if ready:
+            item = STATE["pulls"].get(f"{ready[1]}#{ready[2]}")
+            if item is None:
+                return self._send(404, {"message": "Not Found"})
+            item["draft"] = False
+            return self._send(200, {"draft": False})
         if self.path == "/api/v1/projects/create":
             body = json.loads(raw)
             full = f"{body.get('github', {}).get('owner', '')}/{body['name']}"
@@ -318,6 +326,8 @@ class Handler(BaseHTTPRequestHandler):
             item = STATE["pulls"].get(f"{merge[1]}#{merge[2]}")
             if item is None:
                 return self._send(404, {"message": "Not Found"})
+            if item.get("draft"):
+                return self._send(405, {"message": "Pull Request is still a draft"})
             if json.loads(raw).get("sha") != item["head_sha"]:
                 return self._send(409, {"message": "Head branch was modified"})
             item["merged"] = True
