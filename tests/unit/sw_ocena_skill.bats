@@ -51,7 +51,9 @@ for entry in allow:
     assert "issue edit" not in entry and "api" not in entry.split()[:2], entry
     assert entry.split()[0] in ("gh", "mktemp"), entry
 assert "gh issue comment *" in allow
-assert "Write" not in a["allowedTools"] and "Edit" not in a["allowedTools"]
+assert "Edit" not in a["allowedTools"]
+# the skill writes the comment body with Write to a mktemp file, so both must be allowed
+assert "Write" in a["allowedTools"] and "mktemp" in allow and "mktemp *" in allow
 print("ok")
 PY
   [ "$status" -eq 0 ]

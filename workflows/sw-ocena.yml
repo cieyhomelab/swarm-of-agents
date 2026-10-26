@@ -26,10 +26,11 @@ nodes:
     model: opus
     prompt: |
       Wczytaj skill sw-analityk i pracuj w trybie ocena. Numer issue z kartą pomysłu jest w treści zadania.
-    allowedTools: [Read, Bash]
+    allowedTools: [Read, Write, Bash]
     bashAllowlist:
       - "gh issue view *"
       - "gh issue comment *"
+      - "mktemp"
       - "mktemp *"
 
   - id: done
