@@ -26,9 +26,9 @@ decide() { python3 "$LIB" "$@"; }
 }
 
 @test "a custom limit and a UTC offset are honoured" {
-  run decide 2026-10-01T02:00:00+02:00 2026-10-01T10:00:00Z 10 0 150
+  run decide 2026-10-01T02:00:00+02:00 2026-10-01T10:00:00Z 11 0 150
   [ -z "$output" ]
-  run decide 2026-10-01T02:00:00+02:00 2026-10-01T10:00:00Z 8 0 150
+  run decide 2026-10-01T02:00:00+02:00 2026-10-01T10:00:00Z 10 0 150
   [[ "$output" == "limit czasu"* ]]
 }
 
