@@ -107,3 +107,14 @@ app_runs() { state | jq -c '[.runs[] | select(.project == "proj-app")]'; }
   [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
   [[ "$(pushes | jq -r '.[0].body.title')" == *"ostatni stan: failed, krok testy"* ]]
 }
+
+@test "S12 a variable billed outside the plan: no task starts and the journal has an entry without the value" {
+  project 2026-10-19T12:00:00Z '[]'
+  runs '[{"id":"a","status":"failed","task":"Zrob X"}]'
+  run env ANTHROPIC_API_KEY=sk-x "$bin/sw-limits" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == "WYNIK: ZABLOKOWANY"*ANTHROPIC_API_KEY* ]]
+  [ "$(app_runs | jq length)" -eq 1 ]
+  [[ "$(state | jq -r '.comments["1"][0].body')" == *"zadanie nie wystartowało"*ANTHROPIC_API_KEY* ]]
+  [[ "$(state | jq -r '.comments["1"][0].body')" != *sk-x* ]]
+}
