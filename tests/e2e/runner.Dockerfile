@@ -1,8 +1,8 @@
-# Runner with the VPS toolset (bash, jq, curl) plus bats. The real gh CLI is
+# Runner with the VPS toolset (bash, git, jq, curl) plus bats. The real gh CLI is
 # replaced by tests/fakes/gh, which talks to the mock API.
 FROM mirror.gcr.io/library/debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash bats ca-certificates curl jq python3 python3-yaml \
+ && apt-get install -y --no-install-recommends bash bats ca-certificates curl git jq python3 python3-yaml \
  && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home vps
 COPY --chown=vps . /work

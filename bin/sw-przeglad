@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# sw-przeglad <werdykt> — judges the security review of the whole application (spec S9) in the
+# working directory. The agent sw-bezpieczenstwo (mode aplikacja) writes the result of the four
+# points to .ai/sw-run/przeglad.json; this script does not rest on the agent alone:
+#   - the review passes only with the verdict "pass" AND all four points "pass";
+#   - point 2 (no secrets) is also checked here on the files of the working directory, whatever the agent said.
+# On "pass" it writes docs/security/<date>-raport.md with the result of each point (the
+# workflow commits it in a PR); on problems it writes them to .ai/sw-run/uwagi.md (a fix round
+# of the engineer reads them) and prints them after STAN: BLAD; exit 1.
+# Output: WYNIK: OK <plik raportu> (exit 0) | STAN: BLAD <powód> (exit 1).
+# SW_DATE overrides the date of the report (tests).
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require jq
+
+[ $# -eq 1 ] || sw_die "uzycie: sw-przeglad <werdykt>"
+verdict="$1"
+input=.ai/sw-run/przeglad.json
+names=("brak funkcji z kategorii wykluczonych" "brak sekretów w repozytorium" "każdy adres aplikacji wymaga uwierzytelnienia" "jedno konto właściciela: brak rejestracji innych osób i formularzy zbierających dane osób trzecich")
+
+problems=()
+if [ "$verdict" != pass ]; then problems+=("Werdykt przeglądu to ${verdict:-brak}, nie pass."); fi
+results=("" "" "" "")
+reasons=("" "" "" "")
+if [ ! -r "$input" ] || ! jq -e '.punkty | type == "array"' "$input" >/dev/null 2>&1; then
+  problems+=("Brak poprawnego pliku $input z wynikiem czterech punktów (pole punkty).")
+else
+  for i in 0 1 2 3; do
+    r="$(jq -r --argjson n $((i + 1)) '[.punkty[] | select(.punkt == $n)] | first | .wynik // empty' "$input")"
+    u="$(jq -r --argjson n $((i + 1)) '[.punkty[] | select(.punkt == $n)] | first | .uzasadnienie // empty' "$input" | tr '\n' ' ' | sed -E 's/[[:space:]]+$//' | sw_scrub)"
+    case "$r" in
+      pass | fail) ;;
+      *) problems+=("Punkt $((i + 1)) (${names[$i]}) nie ma wyniku pass ani fail."); r="" ;;
+    esac
+    results[i]="$r"; reasons[i]="$u"
+    if [ "$r" = fail ]; then problems+=("Punkt $((i + 1)) (${names[$i]}): ${u:-bez uzasadnienia}"); fi
+  done
+fi
+
+# point 2 independent of the agent: secret-like strings in the files of the repository (tracked and not ignored; ignored
+# dependency and artefact directories such as .venv are not the repository). Outside a git repository: the whole directory.
+secret_re='-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-ant-[A-Za-z0-9_-]{20,}|xox[bp]-[A-Za-z0-9-]{10,}'
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  hits="$(git ls-files -z --cached --others --exclude-standard | xargs -0 -r grep -IlE -e "$secret_re" 2>/dev/null | grep -v '^\.ai/sw-run/' | head -5)" || true
+else
+  hits="$(grep -rIlE --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=sw-run -e "$secret_re" . 2>/dev/null | head -5)" || true
+fi
+if [ -n "$hits" ]; then
+  results[1]=fail
+  problems+=("Punkt 2 (${names[1]}): w repozytorium są ciągi wyglądające na sekrety, pliki: $(paste -sd, <<<"$hits"). Usuń je z kodu i z historii bieżącej gałęzi, użyj zmiennych środowiskowych.")
+fi
+
+if [ "${#problems[@]}" -gt 0 ]; then
+  mkdir -p .ai/sw-run
+  printf '%s\n' "${problems[@]}" | awk '{print NR ". " $0}' > .ai/sw-run/uwagi.md
+  echo "STAN: BLAD przegląd bezpieczeństwa aplikacji: fail"
+  printf '%s\n' "${problems[@]}"
+  exit 1
+fi
+
+date="${SW_DATE:-$(date -u +%F)}"
+report="docs/security/$date-raport.md"
+mkdir -p docs/security
+{
+  echo "# Raport z przeglądu bezpieczeństwa aplikacji ($date)"
+  echo
+  echo "Przegląd przed wdrożeniem (S9). Wynik: **pass**."
+  echo
+  echo "| Punkt | Wynik | Uzasadnienie |"
+  echo "|-------|-------|--------------|"
+  for i in 0 1 2 3; do
+    echo "| $((i + 1)). ${names[$i]} | ${results[$i]} | ${reasons[$i]//|/\\|} |"
+  done
+} > "$report"
+echo "WYNIK: OK $report"
