@@ -23,15 +23,16 @@ Routes:
                                   400 for Origin/X-Forwarded-For or a body other than {gate, repo, number, title<=100, url}; else 202
   GET  /api/v1/p/<project>/runs[/<id>]        Cezar tasks of one project, from state "runs"
                                               (list of records; a record with "project" is visible only there)
-  POST /api/v1/p/<project>/runs   create a task {task, workflow, autonomous}: appended to state "runs"
+  POST /api/v1/p/<project>/runs   create a task {task, autonomous, workflow?}: appended to state "runs"
                                   as {id "run-N", project, task, workflow, autonomous, status "waiting"}
   GET  /api/v1/p/<project>/runs/<id>/history  task messages, state "histories" (run id -> list of
                                               {role: "user"|"assistant", text}); 404 for an unknown run
   GET  /github/repos/<control>/issues/<n>   one issue of the control repository
   PATCH /github/repos/<control>/issues/<n>  body / labels (list of names) / state of that issue
   GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged, draft})
-  GET  /github/repos/<o>/<r>/pulls?head=<o>:<branch>&state=open|all   open (not merged) PRs whose state entry has
-                                  that "branch" (state=all: merged ones too): [{number, html_url, head: {sha}}]
+  GET  /github/repos/<o>/<r>/pulls?[head=<o>:<branch>&]state=open|closed|all   open (not merged) PRs, closed (= merged) ones or
+                                  both; with head only those whose state entry has that "branch":
+                                  [{number, html_url, head: {sha}, merged_at}]
   POST /github/repos/<o>/<r>/pulls/<n>/ready  takes the PR out of draft (gh pr ready)
   PUT  /github/repos/<o>/<r>/pulls/<n>/merge  405 while the PR is a draft, 409 unless body.sha equals the head sha
   POST /__control                 change state, e.g. {"health_status": 503}
@@ -112,13 +113,16 @@ class Handler(BaseHTTPRequestHandler):
         if listing:
             query = parse_qs(listing[2])
             branch = query.get("head", [""])[0].partition(":")[2]
+            wanted = query.get("state", ["open"])[0]
             found = []
             for key, item in STATE["pulls"].items():
                 repo, _, number = key.partition("#")
-                if repo == listing[1] and item.get("branch") == branch \
-                        and (query.get("state", ["open"])[0] == "all" or not item.get("merged", False)):
+                merged = item.get("merged", False)
+                if repo == listing[1] and (not branch or item.get("branch") == branch) \
+                        and (wanted == "all" or (merged if wanted == "closed" else not merged)):
                     found.append({"number": int(number), "html_url": f"https://github.com/{repo}/pull/{number}",
-                                  "draft": item.get("draft", False), "head": {"sha": item["head_sha"]}})
+                                  "draft": item.get("draft", False), "head": {"sha": item["head_sha"]},
+                                  "merged_at": "2026-10-26T00:00:00Z" if merged else None})
             return self._send(200, found)
         pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
         if pull:
@@ -239,13 +243,13 @@ class Handler(BaseHTTPRequestHandler):
         started = re.fullmatch(r"/api/v1/p/([^/]+)/runs", self.path)
         if started:
             body = json.loads(raw or b"{}")
-            if not isinstance(body.get("task"), str) or not isinstance(body.get("workflow"), str) \
-                    or not isinstance(body.get("autonomous"), bool):
-                return self._send(400, {"error": "task, workflow and autonomous are required"})
+            if not isinstance(body.get("task"), str) or not isinstance(body.get("autonomous"), bool) \
+                    or not isinstance(body.get("workflow", ""), str):
+                return self._send(400, {"error": "task and autonomous are required, workflow is optional"})
             if not isinstance(STATE["runs"], list):
                 return self._send(500, {"error": "state runs is not a list"})
             run = {"id": f"run-{len(STATE['runs']) + 1}", "project": started[1], "task": body["task"],
-                   "workflow": body["workflow"], "autonomous": body["autonomous"], "status": "waiting"}
+                   "workflow": body.get("workflow", ""), "autonomous": body["autonomous"], "status": "waiting"}
             STATE["runs"].append(run)
             return self._send(201, {"id": run["id"]})
         created = re.fullmatch(r"/cez/p/([^/]+)/automations", self.path)

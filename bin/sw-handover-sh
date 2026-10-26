@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# sw-handover-sh [<nr>] — stage 1 exception of the spec (S4, "Współistnienie z sh-skills"):
+# hands the application project over to the sh-* chain once its specification is merged.
+# The one script that may name sh-* (tests/tools/check-names.sh).
+#
+# <nr> is the idea issue of the control repository; without it the link in the README of
+# the checkout in the working directory is used (sw-create-repo seeds it), so the sw-spec
+# workflow calls the script without arguments.
+#
+# Steps, each reading first so that a repeated run only completes what is missing:
+#   1. the idea must be open, "sw-pomysl" with "sw-stan-specyfikacja" and "repo" and
+#      "projectId" in its <!-- sw:meta {...} --> block;
+#   2. the application repository must have a merged pull request (the specification);
+#   3. POST /api/v1/p/{projectId}/runs starts an autonomous task that loads the skill
+#      sh-start (a live task with the same text, left by an interrupted run, is reused);
+#   4. ONE PATCH of the idea from a fresh read: label "sw-spec-gotowa", meta
+#      "handoverRunId", state closed. The task is started BEFORE the patch: after a
+#      failed start the idea is still open and a repeated run tries again. A closed idea
+#      leaves the active projects of sw-gate, which also skips repositories that already
+#      have the sh-* delivery workflow.
+#
+# Output: WYNIK: PRZEKAZANY <runId> | WYNIK: POMINIETO <powód> (exit 0: nothing to hand
+# over or the specification is not merged yet); STAN: BLAD <powód> with exit 1 when
+# Cezar or GitHub fail.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq curl python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+skip() { echo "WYNIK: POMINIETO $*"; exit 0; }
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+
+number="${1:-}"
+if [ -z "$number" ]; then
+  [ -r README.md ] || fail "brak numeru pomyslu i README.md z linkiem"
+  link="$(grep -oE "https://github\.com/${control//./\\.}/issues/[0-9]+" README.md | head -1)" || true
+  [ -n "$link" ] || fail "README.md nie ma linku do pomyslu w $control"
+  number="${link##*/}"
+fi
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-handover-sh [<numer issue>]"
+
+# read_issue — fresh JSON of the idea in $issue and its meta in $meta; status 1 when the
+# idea is not an open project waiting for the handover.
+read_issue() {
+  issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+  meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
+    | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+    || fail "niepoprawne metadane issue $number"
+  printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == "sw-stan-specyfikacja")
+    and (any(.labels[]?; .name == "sw-spec-gotowa") | not)' >/dev/null
+}
+read_issue || skip "issue $number nie jest projektem w stanie sw-stan-specyfikacja czekajacym na przekazanie"
+
+repo="$(jq -r '.repo // empty' <<<"$meta")"
+project_id="$(jq -r '.projectId // empty' <<<"$meta")"
+if [ -z "$repo" ] || [ -z "$project_id" ]; then skip "issue $number nie ma repozytorium i projektu w metadanych"; fi
+[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "niepoprawne repozytorium: $repo"
+
+# the specification is a merged pull request of the application repository
+pulls="$(gh api "repos/$repo/pulls?state=closed&per_page=100" 2>/dev/null)" \
+  || fail "nie mozna odczytac PR repozytorium $repo"
+jq -e 'any(.[]?; (.merged_at // "") != "" or .merged == true)' <<<"$pulls" >/dev/null \
+  || skip "specyfikacja w $repo nie jest jeszcze zmergowana"
+
+task="Wczytaj skill sh-start i skonfiguruj repozytorium $repo."
+runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
+  || fail "nie mozna odczytac zadan Cezara projektu $project_id"
+run_id="$(printf '%s' "$runs" | jq -r --arg t "$task" '
+  (if type == "array" then . else (.runs // []) end)
+  | map(select(.task == $t and (.status == "waiting" or .status == "running" or .status == "queued")))
+  | first.id // empty' 2>/dev/null)" || fail "niepoprawna lista zadan Cezara"
+if [ -z "$run_id" ]; then
+  out="$(jq -nc --arg t "$task" '{task: $t, autonomous: true}' | curl -sS --max-time 60 -w '\n%{http_code}' -X POST \
+    -H 'Content-Type: application/json' --data-binary @- "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
+    || fail "Cezar nie uruchomil zadania sh-start w projekcie $project_id"
+  http="${out##*$'\n'}"
+  [[ "$http" =~ ^2 ]] || fail "Cezar nie uruchomil zadania sh-start w projekcie $project_id (HTTP $http)"
+  run_id="$(jq -r '.id // empty' <<<"${out%$'\n'*}")"
+fi
+[ -n "$run_id" ] || fail "Cezar nie zwrocil identyfikatora zadania sh-start"
+sw_log "sw-handover-sh: zadanie sh-start $run_id w projekcie $project_id"
+
+# One PATCH from a fresh read: nothing else the idea holds is overwritten.
+read_issue || skip "issue $number zmienilo stan w trakcie przekazania"
+meta="$(jq -c --arg r "$run_id" '. + {handoverRunId: $r}' <<<"$meta")"
+new_body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(printf '%s' "$issue" | jq -r '.body // ""')")" \
+  || fail "nie mozna zlozyc nowej tresci issue $number"
+labels="$(printf '%s' "$issue" | jq -c '[.labels[].name] + ["sw-spec-gotowa"] | unique')"
+jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l, state: "closed"}' \
+  | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna oznaczyc issue $number jako sw-spec-gotowa"
+
+"$here/sw-log" "przekazanie: pomysł #$number: $repo przekazany łańcuchowi sh-* (zadanie $run_id)" >/dev/null \
+  || sw_log "nie mozna zapisac przekazania w dzienniku"
+
+echo "WYNIK: PRZEKAZANY $run_id"

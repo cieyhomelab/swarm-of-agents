@@ -14,6 +14,8 @@
 #    sw-merge spec (verdicts and run ids from node outputs, models from the Cezar run
 #    records, the SHA captured before the review) and sw-notify spec (the owner gets the
 #    PR link). A push after the verdicts changes the head and blocks the merge.
+# 6. bin/sw-handover-sh (stage 1 only) hands the merged project over to the other agent
+#    chain, closes the idea with "sw-spec-gotowa"; stage 2 replaces it with sw-build.
 #
 # Every ending without a merge (remarks left after the last round, failed security
 # review, unmet merge conditions, a failed agent) ends the task with status success on
@@ -176,6 +178,11 @@ nodes:
     name: Powiadomienie „specyfikacja gotowa”
     command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" notify
 
+  - id: handover
+    type: check
+    name: Przekazanie projektu (etap 1)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-handover-sh"
+
   - id: pause-rounds
     type: check
     name: Wstrzymanie projektu po uwagach z ostatniej rundy
@@ -240,5 +247,7 @@ edges:
   - { from: pause-rounds.fail, to: stopped }
   - { from: pause-security.pass, to: stopped }
   - { from: pause-security.fail, to: stopped }
-  - { from: notify.pass, to: done }
-  - { from: notify.fail, to: done }
+  - { from: notify.pass, to: handover }
+  - { from: notify.fail, to: handover }
+  - { from: handover.pass, to: done }
+  - { from: handover.fail, to: done }
