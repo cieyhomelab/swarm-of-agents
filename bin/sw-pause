@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# sw-pause <nr> <powód> [--pr <url>] — pauses the project of idea issue <nr> in the control
+# repository (spec S11, S12). ONE PATCH from a fresh read sets "sw-stan-wstrzymany" (every
+# other project-state label goes, also "sw-czeka-na-limit"), writes "pauseReason" in the
+# <!-- sw:meta {...} --> block and closes the issue. Then it logs the pause in the journal
+# and sends "sw-notify blocked" with the reason: the owner gets no questions, the gate no
+# longer counts the project as active, so the next cycle starts the generator.
+#
+# Output: WYNIK: WSTRZYMANY | WYNIK: POMINIETO <powód> (idea already paused, closed or
+# not a project); STAN: BLAD <powód> with exit 1 when GitHub fails or the number is invalid.
+# A notification the gate refused does not undo the pause (the journal keeps the entry).
+# TODO(cezar-pwa): the "paused" gate kind replaces "blocked" once the sidecar supports it.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[ $# -ge 2 ] || sw_die "uzycie: sw-pause <nr> <powod> [--pr <url>]"
+number="$1" reason="$2"; shift 2
+pr_url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pr) [ $# -ge 2 ] || sw_die "brak wartosci --pr"; pr_url="$2"; shift 2 ;;
+    *) sw_die "nieznany argument: $1" ;;
+  esac
+done
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "niepoprawny numer: $number"
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+issue_url="https://github.com/$control/issues/$number"
+
+reason="$(printf '%s' "$reason" | sw_scrub | tr '\n' ' ')"
+reason="${reason:0:300}"
+[ -z "$pr_url" ] || [[ "$pr_url" == https://github.com/* ]] || sw_die "adres PR musi zaczynac sie od https://github.com/"
+stored="$reason"; [ -z "$pr_url" ] || stored="$reason (PR $pr_url)"
+
+issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+if ! printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and (any(.labels[]?; .name == "sw-stan-wstrzymany") | not)' >/dev/null; then
+  echo "WYNIK: POMINIETO issue $number nie jest aktywnym pomyslem"
+  exit 0
+fi
+
+meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
+  | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+  || fail "niepoprawne metadane issue $number"
+meta="$(jq -c --arg r "$stored" '. + {pauseReason: $r}' <<<"$meta")"
+new_body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(printf '%s' "$issue" | jq -r '.body // ""')")" \
+  || fail "nie mozna zlozyc nowej tresci issue $number"
+labels="$(printf '%s' "$issue" | jq -c '[.labels[].name
+  | select(. != "sw-w-ocenie" and . != "sw-zatwierdzony" and . != "sw-czeka-na-limit" and (startswith("sw-stan-") | not))] + ["sw-stan-wstrzymany"] | unique')"
+jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l, state: "closed"}' \
+  | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna wstrzymac issue $number"
+
+"$here/sw-log" "wstrzymanie: pomysł #$number: $stored" >/dev/null || sw_log "nie mozna zapisac wstrzymania w dzienniku"
+"$here/sw-notify" blocked "$control" "$number" "Projekt wstrzymany: $reason" "$issue_url" >/dev/null \
+  || sw_log "powiadomienie o wstrzymaniu pomyslu #$number nie zostalo wyslane"
+
+echo "WYNIK: WSTRZYMANY"

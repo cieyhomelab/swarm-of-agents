@@ -25,7 +25,9 @@
 # "sw-w-ocenie", "sw-zatwierdzony" or has a "sw-stan-*" label other than
 # "sw-stan-wdrozony" / "sw-stan-wstrzymany". Projects already handed over to the
 # sh-* chain (repository with .ai/cezar/workflows/sh-delivery.yml) are left
-# alone. Apart from the journal entries above and generator.json it changes nothing.
+# alone. Every other active project first goes through bin/sw-limits: over its time or
+# usage limit it is paused (sw-pause) and no longer counts as active. Apart from that, the
+# journal entries above and generator.json the gate changes nothing.
 # Exit code 0 when the gate ran on a healthy runtime, 1 otherwise.
 set -uo pipefail
 
@@ -166,6 +168,13 @@ while IFS= read -r issue; do
   repo="$(printf '%s' "$issue" | jq -r '.meta.repo // empty')"
   if [ -n "$repo" ] && gh api "repos/$repo/contents/.ai/cezar/workflows/sh-delivery.yml" >/dev/null 2>&1; then
     continue # sh-* project: not ours
+  fi
+  # Limits are checked before any task is assigned (spec S12): a project over its time or
+  # usage limit is paused and no longer counts as active, so this cycle may generate.
+  if limits="$("$here/sw-limits" "$number")"; then
+    case "$limits" in "WYNIK: WSTRZYMANY"*) continue ;; esac
+  else
+    sw_log "bramka: sprawdzenie limitow pomyslu #$number nie powiodlo sie: $limits"
   fi
   active=$((active + 1))
   if printf '%s' "$issue" | jq -e '.labels | index("sw-w-ocenie")' >/dev/null; then
