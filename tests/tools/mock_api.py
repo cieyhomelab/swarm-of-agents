@@ -6,7 +6,8 @@ Routes:
   GET  /api/v1/workspace/config   Cezar workspace config (resources.maxParallel)
   POST /api/v1/projects/create    Cezar project + private repository {name, github:{owner}}; a name in state
                                   "create_fail" ({name: 409|500}) fails with that status, a name already in
-                                  state "projects" or "repos" gives 409; registers the repository in "repos"
+                                  state "projects" or "repos" gives 409; a name in state "create_race" ({name: 409|500}) registers a foreign
+                                  repository of that name and then fails with that status; registers the repository in "repos"
   POST /api/v1/projects/checkout  register an existing repository {url} as a Cezar project (state "projects")
   PATCH /api/v1/projects/<id>     {maxParallel}: stored on the project in state "projects"
   GET  /github/repos/<o>/<r>[/contents/<path>]   (state "repo_fail" {"o/r": status} fails it with that status) other repositories, state "repos" ("o/r" -> {private, topics,
@@ -66,6 +67,7 @@ DEFAULTS = {
     "projects": [],
     "create_fail": {},
     "repo_fail": {},
+    "create_race": {},
     "histories": {},
     "comments": {},
     "push_token": "test-token",
@@ -190,6 +192,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/v1/projects/create":
             body = json.loads(raw)
             full = f"{body.get('github', {}).get('owner', '')}/{body['name']}"
+            race = STATE["create_race"].get(body["name"])
+            if race:  # the name is taken by somebody else between the check and the POST
+                STATE["repos"][full] = {"private": True, "topics": [], "files": {}}
+                return self._send(race, {"error": "folder_exists" if race == 409 else "github_create"})
             failure = STATE["create_fail"].get(body["name"])
             if failure:
                 return self._send(failure, {"error": "folder_exists" if failure == 409 else "github_create"})
