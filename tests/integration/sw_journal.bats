@@ -191,3 +191,37 @@ journal() {
   [[ "$(pushes | jq -c '.[0].body')" != *"test-token"* ]]
   [[ "$(journal_bodies)" != *"test-token"* ]]
 }
+
+# finished <closed-issues-json> — closed idea cards of the control repository.
+finished() { control "{\"issues\": $1}"; }
+
+@test "S13 sw-notify deployed and paused add the share of projects without intervention" {
+  finished '[{"number":3,"state":"closed","labels":[{"name":"sw-pomysl"},{"name":"sw-stan-wdrozony"},{"name":"sw-bez-interwencji"}]},
+             {"number":4,"state":"closed","labels":[{"name":"sw-pomysl"},{"name":"sw-stan-wdrozony"},{"name":"sw-bez-interwencji"}]},
+             {"number":5,"state":"closed","labels":[{"name":"sw-pomysl"},{"name":"sw-stan-wstrzymany"}]},
+             {"number":6,"state":"closed","labels":[{"name":"sw-pomysl"},{"name":"sw-odrzucony"}]}]'
+  run "$ROOT/bin/sw-notify" deployed cieyhomelab/sw-control 3 "Wdrożono: http://127.0.0.1:18100 (planer)" https://github.com/cieyhomelab/sw-control/issues/3
+  [ "$output" = "WYNIK: WYSLANO" ]
+  run "$ROOT/bin/sw-notify" paused cieyhomelab/sw-control 5 "Projekt wstrzymany: limit czasu" https://github.com/cieyhomelab/sw-control/issues/5
+  [ "$output" = "WYNIK: WYSLANO" ]
+  [ "$(pushes | jq -r '.[0].body.title')" = "Wdrożono: http://127.0.0.1:18100 (planer) · 67% bez interwencji" ]
+  [ "$(pushes | jq -r '.[0].body.gate')" = spec ]
+  [ "$(pushes | jq -r '.[1].body.title')" = "Projekt wstrzymany: limit czasu · 67% bez interwencji" ]
+  [ "$(pushes | jq -r '.[1].body.gate')" = blocked ]
+}
+
+@test "S13 the share never pushes the title over 100 characters and the base is cut, not the share" {
+  finished '[{"number":3,"state":"closed","labels":[{"name":"sw-pomysl"},{"name":"sw-stan-wdrozony"},{"name":"sw-bez-interwencji"}]}]'
+  long="$(printf 'x%.0s' $(seq 1 150))"
+  run "$ROOT/bin/sw-notify" paused cieyhomelab/sw-control 3 "$long" https://github.com/cieyhomelab/sw-control/issues/3
+  [ "$output" = "WYNIK: WYSLANO" ]
+  title="$(pushes | jq -r '.[0].body.title')"
+  [ "${#title}" -eq 100 ]
+  [[ "$title" == *" · 100% bez interwencji" ]]
+}
+
+@test "S13 without finished projects the title has no share" {
+  finished '[]'
+  run "$ROOT/bin/sw-notify" paused cieyhomelab/sw-control 3 "Projekt wstrzymany: x" https://github.com/cieyhomelab/sw-control/issues/3
+  [ "$(pushes | jq -r '.[0].body.title')" = "Projekt wstrzymany: x" ]
+}

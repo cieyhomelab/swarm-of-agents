@@ -3,13 +3,12 @@
 # repository (spec S11, S12). ONE PATCH from a fresh read sets "sw-stan-wstrzymany" (every
 # other project-state label goes, also "sw-czeka-na-limit"), writes "pauseReason" in the
 # <!-- sw:meta {...} --> block and closes the issue. Then it logs the pause in the journal
-# and sends "sw-notify blocked" with the reason: the owner gets no questions, the gate no
+# and sends "sw-notify paused" with the reason and the share of projects without intervention (S13): the owner gets no questions, the gate no
 # longer counts the project as active, so the next cycle starts the generator.
 #
 # Output: WYNIK: WSTRZYMANY | WYNIK: POMINIETO <powód> (idea already paused, closed or
 # not a project); STAN: BLAD <powód> with exit 1 when GitHub fails or the number is invalid.
 # A notification the gate refused does not undo the pause (the journal keeps the entry).
-# TODO(cezar-pwa): the "paused" gate kind replaces "blocked" once the sidecar supports it.
 set -uo pipefail
 
 here="$(dirname "$0")"
@@ -63,7 +62,7 @@ jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l, state: 
   || fail "nie mozna wstrzymac issue $number"
 
 "$here/sw-log" "wstrzymanie: pomysł #$number: $stored" >/dev/null || sw_log "nie mozna zapisac wstrzymania w dzienniku"
-"$here/sw-notify" blocked "$control" "$number" "Projekt wstrzymany: $reason" "$issue_url" >/dev/null \
+"$here/sw-notify" paused "$control" "$number" "Projekt wstrzymany: $reason" "$issue_url" >/dev/null \
   || sw_log "powiadomienie o wstrzymaniu pomyslu #$number nie zostalo wyslane"
 
 echo "WYNIK: WSTRZYMANY"

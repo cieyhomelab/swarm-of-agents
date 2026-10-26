@@ -183,7 +183,7 @@ journal_text() { state | jq -r '[.comments["1"][]?.body] | join("\n")'; }
   [[ "$output" == "WYNIK: WSTRZYMANY wyczerpane ponowienia (2/2)"* ]]
   paused
   [ "$(pushes | jq length)" -eq 1 ]
-  [[ "$(pushes | jq -r '.[0].body.title')" == *"ostatni stan: failed, krok testy"* ]]
+  [[ "$(pushes | jq -r '.[0].body.title')" == *"ostatni stan: failed, krok te"* ]]
 }
 
 @test "S12 a variable billed outside the plan: no task starts, the journal has an entry" {

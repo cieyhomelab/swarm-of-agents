@@ -5,7 +5,9 @@
 # ONE PATCH from a fresh read swaps the label, stores "deployUrl" in the <!-- sw:meta {...} -->
 # block and closes the idea issue, so the gate no longer counts the project as active and the next
 # cycle starts the generator. Then it logs the deployment (without the address) and notifies:
-# "sw-notify deployed" (the title carries the address; a stand-in for the cezar-pwa kind).
+# "sw-notify deployed" (the title carries the address and the share of projects without
+# intervention; a stand-in for the cezar-pwa kind). S13: a project that reached the deployment
+# without "sw-stan-wstrzymany" gets "sw-bez-interwencji" in the same PATCH.
 # The idea comes from the README of the checkout in the working directory.
 #
 # Output: WYNIK: WDROZONY <adres> | WYNIK: POMINIETO <powód> (exit 0: the idea is not in
@@ -52,16 +54,18 @@ text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, fl
 sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(printf '%s' "$issue" | jq -r '.body // ""')")" \
   || fail "nie mozna zlozyc nowej tresci issue $number"
 labels="$(printf '%s' "$issue" | jq -c '[.labels[].name
-  | select(. != "sw-w-ocenie" and . != "sw-zatwierdzony" and . != "sw-czeka-na-limit" and (startswith("sw-stan-") | not))] + ["sw-stan-wdrozony"] | unique')"
+  | select(. != "sw-w-ocenie" and . != "sw-zatwierdzony" and . != "sw-czeka-na-limit" and (startswith("sw-stan-") | not))] + ["sw-stan-wdrozony"]
+  + (if any(.labels[]?; .name == "sw-stan-wstrzymany") then [] else ["sw-bez-interwencji"] end) | unique')"
 jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l, state: "closed"}' \
   | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
   || fail "nie mozna przestawic issue $number na stan wdrozony"
 
 "$here/sw-log" "wdrożenie: pomysł #$number: wdrożony" >/dev/null || sw_log "nie mozna zapisac wdrozenia w dzienniku"
-# the title is limited to 100 characters: the address first, the name shortened
+# the title is limited to 100 characters: the address first, the name shortened (sw-notify
+# appends the share of projects without intervention, about 40 characters)
 [ -n "$name" ] || name=aplikacja
 head="Wdrożono: $url"
-title="$head (${name:0:$((95 - ${#head}))})"
+title="$head (${name:0:$((55 - ${#head}))})"
 "$here/sw-notify" deployed "$control" "$number" "$title" "https://github.com/$control/issues/$number" >/dev/null \
   || sw_log "powiadomienie o wdrozeniu pomyslu #$number nie zostalo wyslane"
 

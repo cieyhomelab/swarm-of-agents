@@ -38,7 +38,7 @@ project() {
   run "$ROOT/bin/sw-wdrozony"
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "WYNIK: WDROZONY http://127.0.0.1:18100" ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
   [ "$(idea | jq -r .state)" = closed ]
   # the address is kept in the metadata, the other fields stay
   meta="$(idea | jq -r .body | grep -o '<!-- sw:meta .* -->' | sed -E 's/<!-- sw:meta (.*) -->/\1/')"
@@ -47,7 +47,7 @@ project() {
   # one notification: the address and the name in the title, a GitHub link as the url
   [ "$(pushes | jq length)" -eq 1 ]
   req="$(pushes | jq -c '.[0].body')"
-  [[ "$(jq -r .title <<<"$req")" == "Wdrożono: http://127.0.0.1:18100 (planer)" ]]
+  [[ "$(jq -r .title <<<"$req")" == "Wdrożono: http://127.0.0.1:18100 (planer) · 100% bez interwencji" ]]
   [ "$(jq -r .url <<<"$req")" = https://github.com/cieyhomelab/sw-control/issues/7 ]
 }
 
@@ -89,5 +89,5 @@ project() {
   run "$ROOT/bin/sw-wdrozony"
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "WYNIK: WDROZONY http://127.0.0.1:18100" ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
 }
