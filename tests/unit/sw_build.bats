@@ -275,6 +275,26 @@ complete_impl() {
   [[ "$output" == *"b.py:2: test E2E pominięty"* ]]
 }
 
+@test "S7 Go, Mocha, Jest each and unittest skip constructs fail the e2e check" {
+  complete_impl
+  printf 'func TestS1(t *testing.T) {\n\tt.Skip("later")\n\tt.Skipf("x %%d", 1)\n\tt.SkipNow()\n}\n' > "$WORK/tests/e2e/a_test.go"
+  printf 'it("S1 x", function () { this.skip(); });\nit.skip.each([1])("a", () => {});\n' > "$WORK/tests/e2e/b.spec.ts"
+  printf 'def test_s1(self):\n    self.skipTest("x")\n    pytest.importorskip("m")\n' > "$WORK/tests/e2e/c.py"
+  pokrycie e2e
+  [ "$status" -eq 1 ]
+  for m in a_test.go:2 a_test.go:3 a_test.go:4 b.spec.ts:1 b.spec.ts:2 c.py:2 c.py:3; do
+    [[ "$output" == *"$m: test E2E pominięty"* ]]
+  done
+}
+
+@test "S7 skip-like words in Go, Mocha and unittest names do not fail the e2e check" {
+  complete_impl
+  printf 'func TestS1(t *testing.T) {\n\tt.Run("S1 skip", nil)\n\tlist.skip(1)\n}\n' > "$WORK/tests/e2e/a_test.go"
+  printf 'def test_s2(self):\n    self.assertTrue(skipTest_ok)\n' > "$WORK/tests/e2e/c.py"
+  pokrycie e2e
+  [ "$status" -eq 0 ]
+}
+
 @test "S7 S1 does not satisfy S10 (identifiers are compared whole)" {
   complete_impl
   printf '\n### S10: Eksport\nz\n' >> "$WORK/.ai/specs/spec.md"
