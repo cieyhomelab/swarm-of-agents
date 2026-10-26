@@ -2,17 +2,23 @@
 """Minimal interpreter of Cezar version-2 workflows for E2E tests.
 
 Walks the graph of one workflow file the way Cezar does for the node types used
-by sw-sweep: start, end, check (bash command, ports pass/fail), if (condition
+by sw-sweep and sw-spec: start, end, check (bash command, ports pass/fail), if (condition
 `output` + `contains`), loop (ports repeat/exhausted, `max` iterations) and agent
 (replaced by the executable in $MOCK_AGENT, called with the node id and the loop
 iteration; its last stdout line is the verdict, a non-zero exit is port `failed`;
-an agent without verdicts leaves through `done`).
+an agent without verdicts leaves through `done`), git.commit / git.push / github.draft-pr
+(no-ops that leave through done / done / created; the executable in $MOCK_GIT, when set,
+is called with the node id and a non-zero exit is port `failed`).
+In a check command the placeholders {{nodes.<id>.verdict|runId|output}} are replaced:
+the verdict is the last agent output, the run id is the node id (tests seed the
+Cezar run records under these ids), the output is the stdout of the last check run.
 
 Usage: run_workflow.py <workflow.yml>
 Prints "TRACE <node> <port>" per step and "END <node> <status>" at the end.
 Exit code 0 when an end node was reached.
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -25,7 +31,17 @@ def main(path):
     edges = {}
     for edge in doc["edges"]:
         edges[edge["from"]] = edge["to"]
-    outputs, loops = {}, {}
+    outputs, loops, verdicts = {}, {}, {}
+    placeholder = re.compile(r"\{\{nodes\.([A-Za-z0-9_-]+)\.(verdict|runId|output)\}\}")
+
+    def fill(command):
+        def value(match):
+            node_id, field = match[1], match[2]
+            if field == "runId":
+                return node_id
+            return (verdicts if field == "verdict" else outputs).get(node_id, "")
+        return placeholder.sub(value, command)
+
     current = next(n["id"] for n in doc["nodes"] if n["type"] == "start")
     port = "next"
     for _ in range(1000):
@@ -37,9 +53,11 @@ def main(path):
         if kind == "start":
             port = "next"
         elif kind == "check":
-            result = subprocess.run(["bash", "-c", node["command"]], capture_output=True, text=True)
+            result = subprocess.run(["bash", "-c", fill(node["command"])], capture_output=True, text=True)
             outputs[current] = result.stdout
             sys.stderr.write(result.stderr)
+            if result.returncode != 0:
+                sys.stderr.write(result.stdout)
             port = "pass" if result.returncode == 0 else "fail"
         elif kind == "if":
             cond = node["condition"]
@@ -57,6 +75,12 @@ def main(path):
             if not node.get("verdicts") and port != "failed":
                 port = "done"  # an agent without verdicts leaves through "done"
             assert port in ("failed", "done") or port in node.get("verdicts", []), port
+            verdicts[current] = port
+        elif kind in ("git.commit", "git.push", "github.draft-pr"):
+            port = "created" if kind == "github.draft-pr" else "done"
+            hook = os.environ.get("MOCK_GIT")
+            if hook and subprocess.run([hook, current]).returncode != 0:
+                port = "failed"
         else:
             raise SystemExit(f"run_workflow: unsupported node type {kind}")
         print(f"TRACE {current} {port}")

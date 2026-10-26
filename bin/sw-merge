@@ -2,11 +2,13 @@
 # sw-merge — merges a PR only when the conditions of the spec (S4/S8) hold.
 #
 # Usage: sw-merge <owner/repo> <pr> <spec|kod> --sha <sha>
-#          [--projekt <projectId>] --werdykt <rola>=<wynik>@<runId>...
+#          [--projekt <projectId>] [--gotowy] --werdykt <rola>=<wynik>@<runId>...
 # Roles: autor (any result; only its run is used), recenzent, bezpieczenstwo.
 # Verdicts come from workflow node outputs, never from PR comments. Models are
 # read from the Cezar run records (GET /api/v1/p/{id}/runs/{runId}).
 # Output: WYNIK: ZMERGOWANY | WYNIK: WARUNKI_NIESPELNIONE <a,b,...>
+# --gotowy: a draft PR is marked ready for review after the conditions hold, just before
+# the merge (GitHub refuses to merge a draft); a blocked merge leaves it a draft.
 # Exit code 0 when merged, 1 otherwise.
 set -uo pipefail
 
@@ -20,10 +22,12 @@ repo="$1"; pr="$2"; mode="$3"; shift 3
 sha=""
 project="${CEZ_PROJECT_ID:-}"
 verdict_args=()
+ready=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --sha) [ $# -ge 2 ] || usage; sha="$2"; shift 2 ;;
     --projekt) [ $# -ge 2 ] || usage; project="$2"; shift 2 ;;
+    --gotowy) ready=1; shift ;;
     --werdykt) [ $# -ge 2 ] || usage; verdict_args+=("$2"); shift 2 ;;
     *) usage ;;
   esac
@@ -70,6 +74,10 @@ if [ -n "$unmet" ]; then
   sw_log "merge $repo#$pr zablokowany: $list"
   echo "WYNIK: WARUNKI_NIESPELNIONE $list"
   exit 1
+fi
+
+if [ "$ready" -eq 1 ] && ! gh pr ready "$pr" --repo "$repo" >/dev/null 2>&1; then
+  fail "nie-udalo-sie-oznaczyc-gotowy"
 fi
 
 if jq -nc --arg sha "$sha" '{sha: $sha, merge_method: "squash"}' \

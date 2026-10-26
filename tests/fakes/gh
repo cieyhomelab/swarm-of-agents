@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Fake GitHub CLI for tests. Supports `gh api [-X METHOD] [--paginate]
+# Fake GitHub CLI for tests. Supports `gh pr ready <n> --repo <o/r>` and `gh api [-X METHOD] [--paginate]
 # [--input -] PATH [--jq EXPR]` by forwarding to the mock API at
 # $FAKE_GH_API_URL. Anything else fails.
 set -euo pipefail
 
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "ready" ]; then
+  # gh pr ready <n> --repo <o/r>
+  curl -fsS -X POST "${FAKE_GH_API_URL:?}/github/repos/${5:?}/pulls/${3:?}/ready" >/dev/null
+  exit $?
+fi
 [ "${1:-}" = "api" ] || { echo "fake gh: unsupported command: $*" >&2; exit 2; }
 shift
 

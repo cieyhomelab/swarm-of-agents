@@ -11,16 +11,23 @@
 #      (folder_exists) moves on to the next name, 500 (github_create) does so only
 #      when the repository exists on GitHub by now. An adopted repository is
 #      registered with POST /api/v1/projects/checkout, unless Cezar knows it;
-#   3. seeds README.md (link to the idea issue) and, when the checkout has it,
+#   3. seeds README.md (link to the idea issue), .gitignore (.ai/sw-run/) and, when the checkout has it,
 #      workflows/sw-spec.yml as .ai/cezar/workflows/sw-spec.yml; sets the topic
 #      "sw-projekt" and the project's maxParallel (config "maxParallelAgents");
 #      Before every POST create the candidate name is saved in the issue meta
 #      ("pendingRepo"); a run interrupted before the topic was set adopts it.
 #      After 409/500 (name taken by somebody else) the claim is dropped again;
-#   4. ONE PATCH of the issue from a fresh read: meta "repo"/"projectId", label
-#      sw-zatwierdzony -> sw-stan-specyfikacja.
+#   4. starts the autonomous Cezar task of the sw-spec workflow in the new project
+#      (task "Specyfikacja aplikacji: <control>#<nr>"; a live task with the same
+#      text, left by an interrupted run, is reused). The workflow file is seeded in
+#      step 3, so the task is started only when the checkout has it;
+#   5. ONE PATCH of the issue from a fresh read: meta "repo"/"projectId", label
+#      sw-zatwierdzony -> sw-stan-specyfikacja. The task is started BEFORE this
+#      patch: after a failed start the idea is still "sw-zatwierdzony" and a repeated
+#      run adopts the repository and tries again.
 #
-# Output: WYNIK: REPO <owner/name> <projectId> | WYNIK: POMINIETO <powód> (exit 0,
+# Output: WYNIK: REPO <owner/name> <projectId> (the last line; the sw-spec task id goes to
+# the log) | WYNIK: POMINIETO <powód> (exit 0,
 # the issue is not an approved idea without a repository); STAN: BLAD <powód> with
 # exit 1 when Cezar or GitHub fail.
 set -uo pipefail
@@ -185,6 +192,8 @@ put_file README.md "# $title
 
 Aplikacja powstaje w roju agentów (swarm-of-agents). Pomysł i jego ocena: $issue_url
 " "docs: README z linkiem do pomysłu #$number"
+put_file .gitignore ".ai/sw-run/
+" "chore: ignoruj pliki robocze agentow"
 if [ -r "$SW_ROOT/workflows/sw-spec.yml" ]; then
   put_file .ai/cezar/workflows/sw-spec.yml "$(cat "$SW_ROOT/workflows/sw-spec.yml")
 " "chore: workflow sw-spec"
@@ -198,6 +207,25 @@ jq -nc --argjson t "$topics" '{names: $t}' | gh api -X PUT "repos/$owner/$name/t
 patched="$(jq -nc --argjson n "$max_parallel" '{maxParallel: $n}' | curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
   -X PATCH -H 'Content-Type: application/json' --data-binary @- "$SW_CEZAR_URL/api/v1/projects/$project_id" 2>/dev/null)"
 [[ "$patched" =~ ^2 ]] || fail "nie mozna ustawic maxParallel projektu $project_id (HTTP $patched)"
+
+# The specification task of the new project. The task text carries no idea content: the
+# agents read the card and the sw:ustalenia comment themselves.
+if [ -r "$SW_ROOT/workflows/sw-spec.yml" ]; then
+  spec_task="Specyfikacja aplikacji: $control#$number"
+  runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
+    || fail "nie mozna odczytac zadan Cezara projektu $project_id"
+  spec_run="$(printf '%s' "$runs" | jq -r --arg t "$spec_task" '
+    (if type == "array" then . else (.runs // []) end)
+    | map(select(.workflow == "sw-spec" and .task == $t and (.status == "waiting" or .status == "running" or .status == "queued")))
+    | first.id // empty' 2>/dev/null)" || fail "niepoprawna lista zadan Cezara"
+  if [ -z "$spec_run" ]; then
+    cezar_post "/api/v1/p/$project_id/runs" "$(jq -nc --arg t "$spec_task" '{task: $t, workflow: "sw-spec", autonomous: true}')" \
+      || fail "Cezar nie uruchomil zadania sw-spec w projekcie $project_id (HTTP $http)"
+    spec_run="$(jq -r '.id // empty' <<<"$resp")"
+  fi
+  [ -n "$spec_run" ] || fail "Cezar nie zwrocil identyfikatora zadania sw-spec"
+  info "zadanie sw-spec $spec_run w projekcie $project_id"
+fi
 
 # One PATCH from a fresh read: nothing else the issue holds is overwritten.
 read_issue || fail "issue $number zmienilo stan w trakcie tworzenia repozytorium $owner/$name"

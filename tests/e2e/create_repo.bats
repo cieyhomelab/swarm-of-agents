@@ -80,3 +80,26 @@ create() { run bash "$home/bin/sw-create-repo" "$1"; }
   [ "$(state | jq '.repos | length')" -eq 1 ]
   [ "$(state | jq '.projects | length')" -eq 1 ]
 }
+
+@test "S4 the new project gets the sw-spec workflow and an autonomous sw-spec task for the idea" {
+  control "{\"issues\": [$(journal), $(approved 2 'Planer posiłków')]}"
+  create 2
+  [ "$status" -eq 0 ]
+  s="$(state)"
+  [ "$(jq -c '[.runs[] | select(.workflow == "sw-spec") | {project, autonomous, task}]' <<<"$s")" \
+    = '[{"project":"proj-planer-posilkow","autonomous":true,"task":"Specyfikacja aplikacji: cieyhomelab/sw-control#2"}]' ]
+  [ "$(jq -r '.repos["cieyhomelab/planer-posilkow"].files[".ai/cezar/workflows/sw-spec.yml"].content' <<<"$s" | base64 -d)" \
+    = "$(cat "$home/workflows/sw-spec.yml")" ]
+  [ "$(jq -r '.repos["cieyhomelab/planer-posilkow"].files[".gitignore"].content' <<<"$s" | base64 -d)" = ".ai/sw-run/" ]
+}
+
+@test "S4 a repeated run does not start a second sw-spec task while the first one is alive" {
+  control "{\"issues\": [$(journal), $(approved 2 'Planer posiłków')]}"
+  create 2
+  [ "$status" -eq 0 ]
+  # the idea is back in the state of an interrupted run: approved, repository known to GitHub
+  curl -fsS -X POST "$MOCK_URL/__control" -d "{\"issues\": [$(journal), $(approved 2 'Planer posiłków')]}" >/dev/null
+  create 2
+  [ "$status" -eq 0 ]
+  [ "$(state | jq '[.runs[] | select(.workflow == "sw-spec")] | length')" -eq 1 ]
+}
