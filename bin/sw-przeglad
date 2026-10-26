@@ -40,9 +40,14 @@ else
   done
 fi
 
-# point 2 independent of the agent: secret-like strings in the files of the working directory (without .git and node_modules)
+# point 2 independent of the agent: secret-like strings in the files of the repository (tracked and not ignored; ignored
+# dependency and artefact directories such as .venv are not the repository). Outside a git repository: the whole directory.
 secret_re='-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-ant-[A-Za-z0-9_-]{20,}|xox[bp]-[A-Za-z0-9-]{10,}'
-hits="$(grep -rIlE --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=sw-run -e "$secret_re" . 2>/dev/null | head -5)"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  hits="$(git ls-files -z --cached --others --exclude-standard | xargs -0 -r grep -IlE -e "$secret_re" 2>/dev/null | grep -v '^\.ai/sw-run/' | head -5)" || true
+else
+  hits="$(grep -rIlE --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=sw-run -e "$secret_re" . 2>/dev/null | head -5)" || true
+fi
 if [ -n "$hits" ]; then
   results[1]=fail
   problems+=("Punkt 2 (${names[1]}): w repozytorium są ciągi wyglądające na sekrety, pliki: $(paste -sd, <<<"$hits"). Usuń je z kodu i z historii bieżącej gałęzi, użyj zmiennych środowiskowych.")

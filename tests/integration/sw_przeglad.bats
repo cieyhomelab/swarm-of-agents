@@ -63,6 +63,22 @@ points() { # points <wynik1> <wynik2> <wynik3> <wynik4>
   [ ! -e docs/security ]
 }
 
+@test "a secret in a git-ignored file does not stop the review, the same secret in a tracked file does" {
+  points pass pass pass pass
+  git init -q . && printf '.venv/\n' > .gitignore
+  mkdir -p .venv/lib
+  printf 'KEY=AKIAIOSFODNN7EXAMPLE\n' > .venv/lib/docs.py
+  git add .gitignore && git add -f src 2>/dev/null || true
+  run "$ROOT/bin/sw-przeglad" pass
+  [ "$status" -eq 0 ]
+  printf 'KEY=AKIAIOSFODNN7EXAMPLE\n' > src/config.env
+  git add src/config.env
+  run "$ROOT/bin/sw-przeglad" pass
+  [ "$status" -eq 1 ]
+  grep -q 'src/config.env' .ai/sw-run/uwagi.md
+  ! grep -q '.venv' .ai/sw-run/uwagi.md
+}
+
 @test "an e-mail address in a justification is masked in the report" {
   jq -n '{punkty: [range(1;5) | {punkt: ., wynik: "pass", uzasadnienie: "kontakt jan@example.com"}]}' > .ai/sw-run/przeglad.json
   run "$ROOT/bin/sw-przeglad" pass
