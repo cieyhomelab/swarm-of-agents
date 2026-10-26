@@ -255,6 +255,26 @@ complete_impl() {
   [[ "$output" == *"test E2E pominięty albo oczekujący"* ]]
 }
 
+@test "S7 the words skip and pending in names, assertions and comments do not fail the e2e check" {
+  complete_impl
+  printf '@test "S1: nowe zamówienie ma status pending" {\n  # skip nothing, xfail nothing\n  [ "$(status)" = pending ]\n}\n' >> "$WORK/tests/e2e/app.bats"
+  printf 'it("S2 skip link", () => { expect(order.status).toBe("pending"); });\n' > "$WORK/tests/e2e/app.spec.ts"
+  pokrycie e2e
+  [ "$status" -eq 0 ]
+  [ "$output" = "WYNIK: OK" ]
+}
+
+@test "S7 framework skip constructs fail the e2e check" {
+  complete_impl
+  printf 'test.skip("S1 x", () => {});\n' > "$WORK/tests/e2e/a.spec.ts"
+  printf '@pytest.mark.skip(reason="x")\nxit("y", () => {});\n' > "$WORK/tests/e2e/b.py"
+  pokrycie e2e
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"a.spec.ts:1: test E2E pominięty"* ]]
+  [[ "$output" == *"b.py:1: test E2E pominięty"* ]]
+  [[ "$output" == *"b.py:2: test E2E pominięty"* ]]
+}
+
 @test "S7 S1 does not satisfy S10 (identifiers are compared whole)" {
   complete_impl
   printf '\n### S10: Eksport\nz\n' >> "$WORK/.ai/specs/spec.md"
