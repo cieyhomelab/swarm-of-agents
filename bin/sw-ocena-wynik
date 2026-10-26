@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# sw-ocena-wynik [nr] — applies the owner's decision on an idea under evaluation.
+# The decision is the LAST USER message of the evaluation task history
+# (GET /api/v1/p/{projectId}/runs/{evalRunId}/history) that is exactly
+# "Decyzja: Zatwierdź" or "Decyzja: Odrzuć"; assistant messages and any other
+# text never count. It is applied only when the agent has also left the matching
+# comment (<!-- sw:ustalenia --> / <!-- sw:odrzucenie -->). Then ONE PATCH, from a
+# fresh read of the issue, sets the full label list (sw-w-ocenie ->
+# sw-zatwierdzony | sw-odrzucony) and, on approval, "approvedAt" in the
+# <!-- sw:meta {...} --> block; a rejection also closes the issue.
+#
+# Without <nr> the target is the only open "sw-w-ocenie" idea.
+#
+# Output: WYNIK: ZATWIERDZONY | WYNIK: ODRZUCONY | WYNIK: BRAK_DECYZJI (journal
+# entry, labels untouched) | WYNIK: POMINIETO <powód> (nothing under evaluation);
+# STAN: BLAD <powód> with exit 1 when Cezar or GitHub fail.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq curl python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+control_name="${control#*/}"
+
+number="${1:-}"
+if [ -z "$number" ]; then
+  list="$(gh api "repos/$control/issues?labels=sw-w-ocenie&state=open&per_page=100" 2>/dev/null)" \
+    || fail "nie mozna odczytac issues $control"
+  count="$(printf '%s' "$list" | jq '[.[] | select(.pull_request == null)] | length')" || fail "niepoprawna lista issues"
+  [ "$count" -le 1 ] || fail "wiecej niz jeden pomysl w ocenie"
+  number="$(printf '%s' "$list" | jq -r '[.[] | select(.pull_request == null)][0].number // empty')"
+  if [ -z "$number" ]; then
+    echo "WYNIK: POMINIETO brak pomyslu w ocenie"
+    exit 0
+  fi
+fi
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-ocena-wynik [numer issue]"
+
+# read_issue — fresh JSON of the issue in $issue; only an open idea under evaluation passes.
+read_issue() {
+  issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+  printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == "sw-w-ocenie")' >/dev/null
+}
+if ! read_issue; then
+  echo "WYNIK: POMINIETO issue $number nie jest pomyslem w ocenie"
+  exit 0
+fi
+
+no_decision() {
+  "$here/sw-log" "ocena pomysłu #$number: brak decyzji ($1)" >/dev/null || sw_log "nie mozna zapisac wpisu w dzienniku"
+  echo "WYNIK: BRAK_DECYZJI"
+  exit 0
+}
+
+body="$(printf '%s' "$issue" | jq -r '.body // ""')"
+eval_id="$(printf '%s' "$body" | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {}) | .evalRunId // empty' -r)"
+[ -n "$eval_id" ] || no_decision "brak zadania oceny w metadanych"
+
+project_id="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null \
+  | jq -r --arg n "$control_name" '[.projects[]? | select(.name == $n) | .id][0] // empty' 2>/dev/null)"
+project_id="${project_id:-${CEZ_PROJECT_ID:-}}"
+[ -n "$project_id" ] || fail "projekt $control_name nie jest zarejestrowany w Cezarze ($SW_CEZAR_URL)"
+
+# Task gone (404) means no decision; any other failure is an error, never a guess.
+out="$(curl -sS --max-time 15 -w '\n%{http_code}' "$SW_CEZAR_URL/api/v1/p/$project_id/runs/$eval_id/history" 2>/dev/null)" \
+  || fail "nie mozna odczytac historii zadania $eval_id"
+code="${out##*$'\n'}"
+case "$code" in
+  200) history="${out%$'\n'*}" ;;
+  404) no_decision "brak historii zadania" ;;
+  *) fail "historia zadania $eval_id: HTTP $code" ;;
+esac
+
+# Messages: an array or {messages: [...]}; a user message has role "user", its
+# text is "text" or "content". Only the exact decision line counts.
+decision="$(printf '%s' "$history" | jq -r '
+  (if type == "array" then . else (.messages // []) end)
+  | map(select((.role // .type // "") == "user")
+        | (.text // .content // "") | select(type == "string") | sub("^\\s+"; "") | sub("\\s+$"; "")
+        | select(. == "Decyzja: Zatwierdź" or . == "Decyzja: Odrzuć"))
+  | last // empty' 2>/dev/null)" || fail "niepoprawna historia zadania $eval_id"
+case "$decision" in
+  "Decyzja: Zatwierdź") label=sw-zatwierdzony; marker="<!-- sw:ustalenia -->"; verdict=ZATWIERDZONY ;;
+  "Decyzja: Odrzuć") label=sw-odrzucony; marker="<!-- sw:odrzucenie -->"; verdict=ODRZUCONY ;;
+  *) no_decision "brak wiadomosci Decyzja: Zatwierdź / Odrzuć" ;;
+esac
+
+comments="$(gh api --paginate "repos/$control/issues/$number/comments?per_page=100" 2>/dev/null)" \
+  || fail "nie mozna odczytac komentarzy issue $number"
+if ! printf '%s' "$comments" | jq -es --arg m "$marker" '
+    [.[] | (if type == "array" then .[] else . end) | .body // "" | select(startswith($m))] | length > 0' >/dev/null; then
+  no_decision "brak komentarza agenta $marker"
+fi
+
+# One PATCH from a fresh read: nothing else the issue holds is overwritten.
+read_issue || { echo "WYNIK: POMINIETO issue $number zmienilo stan w trakcie"; exit 0; }
+labels="$(printf '%s' "$issue" | jq -c --arg l "$label" '[.labels[].name | select(. != "sw-w-ocenie")] + [$l] | unique')"
+update="$(jq -nc --argjson l "$labels" '{labels: $l}')"
+if [ "$verdict" = ZATWIERDZONY ]; then
+  fresh="$(printf '%s' "$issue" | jq -r '.body // ""')"
+  meta="$(printf '%s' "$fresh" | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+    || fail "niepoprawne metadane issue $number"
+  meta="$(jq -c --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {approvedAt: $t}' <<<"$meta")"
+  new_body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$fresh")" \
+    || fail "nie mozna zlozyc nowej tresci issue $number"
+  update="$(jq -c --arg b "$new_body" '. + {body: $b}' <<<"$update")"
+else
+  update="$(jq -c '. + {state: "closed"}' <<<"$update")"
+fi
+printf '%s' "$update" | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna zapisac decyzji w issue $number"
+
+echo "WYNIK: $verdict"
