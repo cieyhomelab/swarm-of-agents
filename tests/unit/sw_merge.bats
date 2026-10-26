@@ -50,9 +50,81 @@ check() {
   [ "$output" = "werdykt-recenzent,werdykt-bezpieczenstwo" ]
 }
 
-@test "code mode is not implemented in stage 1" {
-  run bash -c "echo '{\"mode\":\"kod\"}' | python3 '$ROOT/bin/lib/sw_merge.py'"
-  [ "$output" = "tryb-kod" ]
+@test "unknown mode blocks" {
+  run bash -c "echo '{\"mode\":\"xyz\"}' | python3 '$ROOT/bin/lib/sw_merge.py'"
+  [ "$output" = "tryb-xyz" ]
+}
+
+# kod <recenzent-wynik> <bezp-wynik> <requiredChecks-json> <checkRuns-json> [recenzent-model]
+kod() {
+  jq -nc --arg rr "$1" --arg br "$2" --arg rm "${5:-sonnet}" --argjson req "$3" --argjson runs "$4" \
+    '{mode: "kod", sha: "abc", headSha: "abc", authorModel: "opus", requiredChecks: $req, checkRuns: $runs,
+      verdicts: [{role: "recenzent", result: $rr, model: $rm}, {role: "bezpieczenstwo", result: $br, model: "haiku"}]}' \
+    | python3 "$ROOT/bin/lib/sw_merge.py" | paste -sd, -
+}
+GREEN='[{"name":"checks","status":"completed","conclusion":"success"},{"name":"e2e","status":"completed","conclusion":"success"}]'
+REQ='["checks","e2e"]'
+
+@test "code mode: approve, pass and green required checks leave nothing unmet" {
+  [ -z "$(kod approve pass "$REQ" "$GREEN")" ]
+}
+
+@test "code mode: the spec verdict word zatwierdzona is not an approve" {
+  [ "$(kod zatwierdzona pass "$REQ" "$GREEN")" = "werdykt-recenzent" ]
+}
+
+@test "code mode: review changes blocks" {
+  [ "$(kod changes pass "$REQ" "$GREEN")" = "werdykt-recenzent" ]
+}
+
+@test "code mode: security fail blocks" {
+  [ "$(kod approve fail "$REQ" "$GREEN")" = "werdykt-bezpieczenstwo" ]
+}
+
+@test "code mode: reviewer on the author's model does not count" {
+  [ "$(kod approve pass "$REQ" "$GREEN" opus)" = "model-recenzent" ]
+}
+
+@test "code mode: a failed required check blocks" {
+  runs='[{"name":"checks","status":"completed","conclusion":"failure"},{"name":"e2e","status":"completed","conclusion":"success"}]'
+  [ "$(kod approve pass "$REQ" "$runs")" = "check-checks" ]
+}
+
+@test "code mode: a check still running blocks" {
+  runs='[{"name":"checks","status":"completed","conclusion":"success"},{"name":"e2e","status":"in_progress","conclusion":null}]'
+  [ "$(kod approve pass "$REQ" "$runs")" = "check-e2e" ]
+}
+
+@test "code mode: neutral and skipped conclusions are not green" {
+  runs='[{"name":"checks","status":"completed","conclusion":"neutral"},{"name":"e2e","status":"completed","conclusion":"skipped"}]'
+  [ "$(kod approve pass "$REQ" "$runs")" = "check-checks,check-e2e" ]
+}
+
+@test "code mode: a missing named check-run blocks" {
+  runs='[{"name":"checks","status":"completed","conclusion":"success"}]'
+  [ "$(kod approve pass "$REQ" "$runs")" = "check-e2e" ]
+}
+
+@test "code mode: a repository without any check-run blocks" {
+  [ "$(kod approve pass "$REQ" '[]')" = "check-checks,check-e2e" ]
+}
+
+@test "code mode: a differently named green check does not stand in for a required one" {
+  runs='[{"name":"lint","status":"completed","conclusion":"success"},{"name":"e2e","status":"completed","conclusion":"success"}]'
+  [ "$(kod approve pass "$REQ" "$runs")" = "check-checks" ]
+}
+
+@test "code mode: every run of a required name must be green" {
+  runs='[{"name":"checks","status":"completed","conclusion":"success"},{"name":"checks","status":"completed","conclusion":"failure"},{"name":"e2e","status":"completed","conclusion":"success"}]'
+  [ "$(kod approve pass "$REQ" "$runs")" = "check-checks" ]
+}
+
+@test "code mode: no configured required checks blocks" {
+  [ "$(kod approve pass '[]' "$GREEN")" = "check-brak-konfiguracji" ]
+}
+
+@test "spec mode ignores check-runs" {
+  [ -z "$(check zatwierdzona sonnet pass haiku opus abc abc)" ]
 }
 
 @test "the same model under different spellings is one model" {

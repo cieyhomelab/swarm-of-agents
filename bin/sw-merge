@@ -6,6 +6,8 @@
 # Roles: autor (any result; only its run is used), recenzent, bezpieczenstwo.
 # Verdicts come from workflow node outputs, never from PR comments. Models are
 # read from the Cezar run records (GET /api/v1/p/{id}/runs/{runId}).
+# Mode kod additionally needs green check-runs named in config requiredChecks for --sha
+# (GET repos/{o}/{r}/commits/{sha}/check-runs); a missing check-run is an unmet condition.
 # Output: WYNIK: ZMERGOWANY | WYNIK: WARUNKI_NIESPELNIONE <a,b,...>
 # --gotowy: a draft PR is marked ready for review after the conditions hold, just before
 # the merge (GitHub refuses to merge a draft); a blocked merge leaves it a draft.
@@ -63,9 +65,21 @@ done
 head_sha="$(gh api "repos/$repo/pulls/$pr" --jq .head.sha 2>/dev/null)" \
   || { echo "STAN: BLAD nie mozna odczytac PR $repo#$pr"; exit 1; }
 
+required_checks='[]'
+check_runs='[]'
+if [ "$mode" = "kod" ]; then
+  required_checks="$(sw_config '.requiredChecks // []' 2>/dev/null)" || required_checks='[]'
+  # An unreadable check-run list stays empty: the required checks are then missing.
+  check_runs="$(gh api --paginate "repos/$repo/commits/$sha/check-runs?per_page=100" \
+    --jq '.check_runs[] | {name, status, conclusion}' 2>/dev/null | jq -sc '.' 2>/dev/null)" || check_runs='[]'
+  [ -n "$check_runs" ] || check_runs='[]'
+fi
+
 request="$(jq -nc --arg mode "$mode" --arg sha "$sha" --arg head "$head_sha" \
   --arg author "$author_model" --argjson verdicts "$verdicts" \
-  '{mode: $mode, sha: $sha, headSha: $head, authorModel: $author, verdicts: $verdicts}')"
+  --argjson required "$required_checks" --argjson runs "$check_runs" \
+  '{mode: $mode, sha: $sha, headSha: $head, authorModel: $author, verdicts: $verdicts,
+    requiredChecks: $required, checkRuns: $runs}')"
 unmet="$(python3 "$SW_ROOT/bin/lib/sw_merge.py" <<<"$request")" \
   || { echo "STAN: BLAD blad modulu warunkow merge"; exit 1; }
 

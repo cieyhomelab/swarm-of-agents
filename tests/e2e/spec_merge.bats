@@ -65,3 +65,51 @@ merge() {
   [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE sha" ]
   [ "$(pr | jq .merged)" = "false" ]
 }
+
+kod() {
+  run "$BIN/sw-merge" cieyhomelab/app 3 kod --projekt proj --sha abc123 \
+    --werdykt autor=gotowa@analityk --werdykt recenzent="$1"@"$2" --werdykt bezpieczenstwo="$3"@bezp
+}
+checks() { curl -fsS -X POST "$MOCK_URL/__control" -d "{\"check_runs\": {\"cieyhomelab/app@abc123\": $1}}" >/dev/null; }
+GREEN='[{"name":"checks","status":"completed","conclusion":"success"},{"name":"e2e","status":"completed","conclusion":"success"}]'
+
+@test "S8: approve, pass and green required check-runs merge a code PR" {
+  checks "$GREEN"
+  kod approve recenzent pass
+  [ "$status" -eq 0 ]
+  [ "$output" = "WYNIK: ZMERGOWANY" ]
+  [ "$(pr | jq .merged)" = "true" ]
+}
+
+@test "S8: an unmet condition leaves the code PR unmerged" {
+  checks "$GREEN"
+  kod changes recenzent pass
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE werdykt-recenzent" ]
+  kod approve recenzent fail
+  [ "$status" -eq 1 ]
+  [ "$(pr | jq .merged)" = "false" ]
+}
+
+@test "S8: a code review by the author's own model is not an approval" {
+  checks "$GREEN"
+  kod approve recenzent-opus pass
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE model-recenzent" ]
+  [ "$(pr | jq .merged)" = "false" ]
+}
+
+@test "S8: a missing named check-run blocks the code PR" {
+  checks '[{"name":"checks","status":"completed","conclusion":"success"}]'
+  kod approve recenzent pass
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE check-e2e" ]
+  [ "$(pr | jq .merged)" = "false" ]
+}
+
+@test "S8: a repository without CI workflow is not merged" {
+  kod approve recenzent pass
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE check-checks,check-e2e" ]
+  [ "$(pr | jq .merged)" = "false" ]
+}

@@ -5,6 +5,10 @@ Input (JSON on stdin):
   {"mode": "spec", "sha": "<reviewed sha>", "headSha": "<current PR head>",
    "verdicts": [{"role": "recenzent", "result": "zatwierdzona", "model": "anthropic/sonnet[1m]"}, ...],
    "authorModel": "opus"}
+Mode "kod" also takes "requiredChecks" (names) and "checkRuns" ([{name, status, conclusion}]
+of the reviewed SHA); every required name needs at least one run and all its runs must be
+completed with conclusion "success", else "check-<name>" is unmet (no names configured:
+"check-brak-konfiguracji").
 Models are normalized identities (modelIdentity of the Cezar run record).
 Output: one line per unmet condition on stdout (empty = merge allowed).
 """
@@ -12,9 +16,10 @@ import json
 import re
 import sys
 
-# role -> accepted result, per mode. Mode "kod" is stage 2 and not implemented here.
+# role -> accepted result, per mode.
 REQUIRED = {
     "spec": {"recenzent": "zatwierdzona", "bezpieczenstwo": "pass"},
+    "kod": {"recenzent": "approve", "bezpieczenstwo": "pass"},
 }
 
 
@@ -32,6 +37,20 @@ def model_family(identity):
         if re.search(r"(^|[^a-z])" + family + r"([^a-z]|$)", name):
             return family
     return name
+
+
+def unmet_checks(request):
+    """Required check-runs of the reviewed SHA that are missing or not green."""
+    names = [n for n in request.get("requiredChecks") or [] if n]
+    if not names:
+        return ["check-brak-konfiguracji"]
+    runs = request.get("checkRuns") or []
+    unmet = []
+    for name in names:
+        named = [r for r in runs if r.get("name") == name]
+        if not named or any(r.get("status") != "completed" or r.get("conclusion") != "success" for r in named):
+            unmet.append("check-" + name)
+    return unmet
 
 
 def unmet_conditions(request):
@@ -55,6 +74,8 @@ def unmet_conditions(request):
         # A reviewer on the author's model, or one whose model is unknown, does not count.
         if not model or not author or model == author:
             unmet.append("model-" + role)
+    if mode == "kod":
+        unmet += unmet_checks(request)
     return unmet
 
 
