@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # sw-notify <rodzaj> <repo> <nr> <tytul> <url> — push notification for the owner
-# through the cezar-push gate (POST /m/push/gate). rodzaj: spec | blocked | deployed.
-# "deployed" (S10) goes through the gate as "spec" until cezar-pwa has its own kind;
-# the private address of the application is in the title (the url stays a GitHub link).
+# through the cezar-push gate (POST /m/push/gate). rodzaj: spec | blocked | deployed | paused.
+# "deployed" (S10) goes through the gate as "spec" and "paused" (S11) as "blocked" until
+# cezar-pwa has its own kinds; the private address of the application is in the title
+# (the url stays a GitHub link).
+# S13: for "deployed" and "paused" <repo> is the control repository and the title gets the
+# current share of projects finished without intervention: " · 67% bez interwencji",
+# i.e. closed "sw-pomysl" issues labelled "sw-bez-interwencji" / those that are
+# "sw-stan-wdrozony" or "sw-stan-wstrzymany". The share is cut off the end of the 100-char
+# title last; when GitHub cannot be read or nothing is finished yet, the title has no share.
 # Only gate, repo, number, title (<= 100 chars) and url are sent; the token goes
 # in the X-Cezar-Push-Token header, never in the body, the logs or the arguments.
 # Prints "WYNIK: WYSLANO" (exit 0), or "WYNIK: POMINIETO" when there is no token
@@ -16,7 +22,12 @@ sw_require curl jq
 [ $# -eq 5 ] || sw_die "uzycie: sw-notify <rodzaj> <repo> <nr> <tytul> <url>"
 kind="$1" repo="$2" number="$3" title="$4" url="$5"
 
-case "$kind" in spec | blocked) gate="$kind" ;; deployed) gate=spec ;; *) sw_die "nieznany rodzaj powiadomienia: $kind" ;; esac # TODO(cezar-pwa): gate "deployed"
+case "$kind" in
+  spec | blocked) gate="$kind" ;;
+  deployed) gate=spec ;;  # TODO(cezar-pwa): gate "deployed"
+  paused) gate=blocked ;; # TODO(cezar-pwa): gate "paused"
+  *) sw_die "nieznany rodzaj powiadomienia: $kind" ;;
+esac
 [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || sw_die "niepoprawne repozytorium: $repo"
 [[ "$number" =~ ^[0-9]+$ ]] || sw_die "niepoprawny numer: $number"
 [[ "$url" == https://github.com/* ]] || sw_die "adres musi zaczynac sie od https://github.com/"
@@ -31,7 +42,19 @@ token="$(tr -d '\r\n' < "$token_file")"
 [ -n "$token" ] || { echo "UWAGA: pusty token bramki powiadomien" >&2; echo "WYNIK: POMINIETO"; exit 0; }
 
 title="$(printf '%s' "$title" | sw_scrub | tr '\n' ' ')"
-title="${title:0:100}"
+suffix=""
+case "$kind" in deployed | paused)
+  # best effort: a notification without the share is better than none
+  rate="$(gh api --paginate "repos/$repo/issues?labels=sw-pomysl&state=closed&per_page=100" 2>/dev/null \
+    | jq -s -r '[.[] | (if type == "array" then .[] else . end) | select(.pull_request == null) | [.labels[].name]
+        | select(index("sw-stan-wdrozony") or index("sw-stan-wstrzymany"))] as $done
+      | ($done | map(select(index("sw-bez-interwencji") and index("sw-stan-wdrozony"))) | length) as $ok
+      | if ($done | length) == 0 then empty
+        else " · \((100 * $ok / ($done | length) + 0.5) | floor)% bez interwencji" end' 2>/dev/null)" || rate=""
+  suffix="$rate"
+  ;;
+esac
+title="${title:0:$((100 - ${#suffix}))}$suffix"
 body="$(jq -nc --arg gate "$gate" --arg repo "$repo" --argjson number "$number" \
   --arg title "$title" --arg url "$url" '{gate: $gate, repo: $repo, number: $number, title: $title, url: $url}')"
 

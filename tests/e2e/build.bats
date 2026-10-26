@@ -286,7 +286,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   [[ "$output" == *"TRACE e2e-check pass"* && "$output" == *"TRACE e2e-run pass"* && "$output" == *"TRACE tester pass"* ]]
   [[ "$output" == *"END done success"* ]]
   [ "$(called tester)" -eq 1 ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
   # every scenario of the specification has an E2E test
   grep -q 'S1' tests/e2e/app.bats && grep -q 'S2' tests/e2e/app.bats
 }
@@ -302,7 +302,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   [ "$(called review-mod)" -eq 3 ]
   [ "$(called security-mod)" -eq 3 ]
   [[ "$output" == *"TRACE tester pass"* && "$output" == *"END done success"* ]]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
 }
 
 @test "S7 a failing E2E run of the whole application sends the engineer a fix round" {
@@ -324,7 +324,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   [[ "$output" == *"TRACE tester fail"* && "$output" == *"TRACE rounds-test repeat"* ]]
   [ "$(called tester)" -eq 2 ]
   [ "$(called fix-test)" -eq 1 ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
 }
 
 @test "S8 fixRoundsPerPr rounds after failed tests pause the project even with no open PR" {
@@ -355,7 +355,7 @@ report() { ls docs/security/*-raport.md; }
   [[ "$output" =~ ^docs/security/[0-9]{4}-[0-9]{2}-[0-9]{2}-raport\.md$ ]]
   for n in 1 2 3 4; do grep -qE "^\| $n\. .* \| pass \|" docs/security/*-raport.md; done
   [ "$(pr | jq .merged)" = "true" ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
 }
 
 @test "S9 a function of an excluded category stops the deployment and starts a fix task of the engineer" {
@@ -447,12 +447,21 @@ addr=http://127.0.0.1:18100
   reviews approve approve
   build
   [ "$status" -eq 0 ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-bez-interwencji","sw-pomysl","sw-stan-wdrozony"]' ]
   [ "$(idea | jq -r .state)" = closed ]
   [ "$(idea | jq -r .body | grep -c "$addr")" -ge 1 ]
   [ "$(pushes | jq length)" -eq 1 ]
-  [ "$(pushes | jq -r '.[0].body.title')" = "Wdrożono: $addr (planer)" ]
+  [ "$(pushes | jq -r '.[0].body.title')" = "Wdrożono: $addr (planer) · 100% bez interwencji" ]
   [ "$(pushes | jq -r '.[0].body.url')" = https://github.com/cieyhomelab/sw-control/issues/7 ]
+}
+
+@test "S13 from the architecture to the deployment the owner gets no message besides the deployment notification, which shows the share" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [ "$(pushes | jq length)" -eq 1 ]
+  [[ "$(pushes | jq -r '.[0].body.title')" == "Wdrożono: "*" · 100% bez interwencji" ]]
+  [ "$(idea | jq -c '.labels | map(.name) | index("sw-bez-interwencji") != null')" = true ]
 }
 
 @test "S10 a deployed project is no longer active: the next cycle starts the generator" {

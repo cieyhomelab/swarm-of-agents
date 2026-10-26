@@ -35,7 +35,7 @@ pushes() { curl -fsS "$MOCK/__requests" | jq -c '[.[] | select(.path == "/m/push
   [ "$(jq -r .body <<<"$issue" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p' | jq -cS .)" \
     = '{"pauseReason":"uwagi po 2 rundach (PR https://github.com/cieyhomelab/app/pull/3)","repo":"cieyhomelab/app"}' ]
   [[ "$(state | jq -r '.comments["1"][0].body')" == "wstrzymanie: pomysł #5: uwagi po 2 rundach"* ]]
-  [ "$(pushes | jq -c '.[0].body | {gate, number, title}')" = '{"gate":"blocked","number":5,"title":"Projekt wstrzymany: uwagi po 2 rundach"}' ]
+  [ "$(pushes | jq -c '.[0].body | {gate, number, title}')" = '{"gate":"blocked","number":5,"title":"Projekt wstrzymany: uwagi po 2 rundach · 0% bez interwencji"}' ]
 }
 
 @test "personal data in the reason is masked" {

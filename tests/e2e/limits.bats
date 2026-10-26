@@ -106,7 +106,7 @@ app_runs() { state | jq -c '[.runs[] | select(.project == "proj-app")]'; }
   run "$bin/sw-gate"
   [[ "$output" == *"URUCHOM: GENERATOR"* ]]
   [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
-  [[ "$(pushes | jq -r '.[0].body.title')" == *"ostatni stan: failed, krok testy"* ]]
+  [[ "$(pushes | jq -r '.[0].body.title')" == *"ostatni stan: failed, krok te"* ]]
 }
 
 @test "S12 a variable billed outside the plan: no task starts and the journal has an entry without the value" {
