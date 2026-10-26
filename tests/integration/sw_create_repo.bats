@@ -94,6 +94,28 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   [ "$(jq '.projects[0].maxParallel' <<<"$s")" = 3 ]
 }
 
+@test "a repository claimed in the issue meta is adopted although it has neither topic nor README" {
+  empty='{"cieyhomelab/planer": {"private": true, "topics": [], "files": {}}}'
+  control "{\"issues\": [$(idea 7 'Planer' '{"pendingRepo":"planer"}')], \"repos\": $empty}"
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "WYNIK: REPO cieyhomelab/planer proj-planer" ]
+  s="$(state)"
+  [ "$(jq '[.projects[]] | length' <<<"$s")" -eq 1 ]
+  [ "$(curl -fsS "$SW_CEZAR_URL/__requests" | jq '[.[] | select(.path == "/api/v1/projects/create")] | length')" -eq 0 ]
+  [ "$(jq -c '.repos["cieyhomelab/planer"].topics' <<<"$s")" = '["sw-projekt"]' ]
+  [[ "$(readme cieyhomelab/planer)" == *"issues/7"* ]]
+  meta="$(jq -r '.issues[0].body' <<<"$s" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -cS . <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
+}
+
+@test "a claimed name that does not exist on GitHub is ignored and a new repository is created" {
+  control "{\"issues\": [$(idea 7 'Planer' '{"pendingRepo":"planer"}')]}"
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "${lines[-1]}" = "WYNIK: REPO cieyhomelab/planer proj-planer" ]
+  [ "$(curl -fsS "$SW_CEZAR_URL/__requests" | jq '[.[] | select(.path == "/api/v1/projects/create")] | length')" -eq 1 ]
+}
+
 @test "a repository with the topic but a link to another issue is not adopted" {
   control "{\"issues\": [$(idea 7 'Planer')], \"repos\": $(seeded planer 70)}"
   run "$ROOT/bin/sw-create-repo" 7
