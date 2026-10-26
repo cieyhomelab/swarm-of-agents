@@ -34,6 +34,7 @@ state() { curl -fsS -X POST -d '{}' "$SW_CEZAR_URL/__control"; }
   expected="$(jq '.system | sort' "$ROOT/config/labels.json")"
   [ "$(jq '[.labels[].name] | sort' <<<"$s")" = "$expected" ]
   [ "$(jq -r '.contents[".ai/cezar/workflows/sw-sweep.yml"].content' <<<"$s" | base64 -d)" = "$(cat "$ROOT/workflows/sw-sweep.yml")" ]
+  [ "$(jq -r '.contents[".ai/cezar/workflows/sw-ocena.yml"].content' <<<"$s" | base64 -d)" = "$(cat "$ROOT/workflows/sw-ocena.yml")" ]
   [ "$(jq '[.issues[] | select(.title == "sw-dziennik")] | length' <<<"$s")" -eq 1 ]
   [ "$(jq '[.automations[] | select(.name == "sw: przegląd co godzinę" and .enabled)] | length' <<<"$s")" -eq 1 ]
 }
@@ -51,10 +52,10 @@ state() { curl -fsS -X POST -d '{}' "$SW_CEZAR_URL/__control"; }
   [ "$(jq '.issues | length' <<<"$after")" -eq 1 ]
   [ "$(jq '[.automations[] | select(.name == "sw: przegląd co godzinę")] | length' <<<"$after")" -eq 1 ]
   [ "$(jq '.automations | length' <<<"$after")" = "$(jq '.automations | length' <<<"$before")" ]
-  # No repository creation, no file write the second time.
+  # No repository creation, no file write the second time (the first run wrote two workflow copies).
   second="$(requests | jq '[.[] | select(.path == "/api/v1/projects/create")] | length')"
   [ "$second" -eq 1 ]
-  [ "$(requests | jq '[.[] | select(.method == "PUT")] | length')" -eq 1 ]
+  [ "$(requests | jq '[.[] | select(.method == "PUT")] | length')" -eq 2 ]
 }
 
 @test "existing sw-control is not recreated" {

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# sw-start-ocena [nr] — starts the evaluation task of an idea card: a
+# non-autonomous Cezar task of the sw-ocena workflow in the control project
+# (POST /api/v1/p/{projectId}/runs) and stores its id as "evalRunId" in the
+# <!-- sw:meta {...} --> block of the issue (fresh read, then PATCH).
+#
+# Without <nr> the target is the idea under evaluation: the only open
+# "sw-w-ocenie" issue (the sweep workflow calls it right after the card and
+# after "URUCHOM: OCENA <nr>", where the gate allows just one such idea).
+#
+# Output: WYNIK: ZADANIE <runId> | WYNIK: POMINIETO <powód> (exit 0, issue not
+# under evaluation); STAN: BLAD <powód> with exit 1 when Cezar or GitHub fail.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq curl
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+control_name="${control#*/}"
+
+number="${1:-}"
+if [ -z "$number" ]; then
+  list="$(gh api "repos/$control/issues?labels=sw-w-ocenie&state=open&per_page=100" 2>/dev/null)" \
+    || fail "nie mozna odczytac issues $control"
+  count="$(printf '%s' "$list" | jq '[.[] | select(.pull_request == null)] | length')" || fail "niepoprawna lista issues"
+  [ "$count" -le 1 ] || fail "wiecej niz jeden pomysl w ocenie"
+  number="$(printf '%s' "$list" | jq -r '[.[] | select(.pull_request == null)][0].number // empty')"
+  if [ -z "$number" ]; then
+    echo "WYNIK: POMINIETO brak pomyslu w ocenie"
+    exit 0
+  fi
+fi
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-start-ocena [numer issue]"
+
+# Only an open idea card under evaluation gets a task.
+issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+if ! printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == "sw-w-ocenie")' >/dev/null; then
+  echo "WYNIK: POMINIETO issue $number nie jest pomyslem w ocenie"
+  exit 0
+fi
+
+project_id="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null \
+  | jq -r --arg n "$control_name" '[.projects[]? | select(.name == $n) | .id][0] // empty' 2>/dev/null)"
+project_id="${project_id:-${CEZ_PROJECT_ID:-}}"
+[ -n "$project_id" ] || fail "projekt $control_name nie jest zarejestrowany w Cezarze ($SW_CEZAR_URL)"
+
+# The task text carries no idea content: the agent reads the card itself.
+run_id="$(jq -n --arg t "Ocena pomysłu: $control#$number" \
+  '{task: $t, workflow: "sw-ocena", autonomous: false}' \
+  | curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data-binary @- \
+      "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null | jq -er '.id | strings | select(length > 0)')" \
+  || fail "Cezar nie utworzyl zadania sw-ocena"
+
+# evalRunId into the metadata, from a fresh read so that nothing else is overwritten.
+fresh="$(gh api "repos/$control/issues/$number" --jq '.body // ""' 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+meta="$(printf '%s' "$fresh" | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+  || fail "niepoprawne metadane issue $number"
+meta="$(jq -c --arg id "$run_id" '. + {evalRunId: $id}' <<<"$meta")"
+body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$fresh")" \
+  || fail "nie mozna zlozyc nowej tresci issue $number"
+jq -n --arg b "$body" '{body: $b}' | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna zapisac evalRunId w issue $number (zadanie $run_id)"
+
+echo "WYNIK: ZADANIE $run_id"

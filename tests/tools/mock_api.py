@@ -15,6 +15,10 @@ Routes:
                                   400 for Origin/X-Forwarded-For or a body other than {gate, repo, number, title<=100, url}; else 202
   GET  /api/v1/p/<project>/runs[/<id>]        Cezar tasks of one project, from state "runs"
                                               (list of records; a record with "project" is visible only there)
+  POST /api/v1/p/<project>/runs   create a task {task, workflow, autonomous}: appended to state "runs"
+                                  as {id "run-N", project, task, workflow, autonomous, status "waiting"}
+  GET  /github/repos/<control>/issues/<n>   one issue of the control repository
+  PATCH /github/repos/<control>/issues/<n>  body / labels (list of names) of that issue
   GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged})
   PUT  /github/repos/<o>/<r>/pulls/<n>/merge  409 unless body.sha equals the head sha
   POST /__control                 change state, e.g. {"health_status": 503}
@@ -125,6 +129,10 @@ class Handler(BaseHTTPRequestHandler):
             comments = re.fullmatch(r"issues/(\d+)/comments", rest)
             if comments:
                 return self._send(200, STATE["comments"].get(comments[1], []))
+            single = re.fullmatch(r"issues/(\d+)", rest)
+            if single:
+                found = [i for i in STATE["issues"] if i["number"] == int(single[1])]
+                return self._send(200, found[0]) if found else self._send(404, {"message": "Not Found"})
             if rest == "issues":
                 wanted = parse_qs(url.query).get("labels", [None])[0]
                 state = parse_qs(url.query).get("state", ["open"])[0]
@@ -155,6 +163,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"id": "proj-" + body["name"], "name": body["name"]})
         if self.path == "/m/push/gate":
             return self._push_gate(raw)
+        started = re.fullmatch(r"/api/v1/p/([^/]+)/runs", self.path)
+        if started:
+            body = json.loads(raw or b"{}")
+            if not isinstance(body.get("task"), str) or not isinstance(body.get("workflow"), str) \
+                    or not isinstance(body.get("autonomous"), bool):
+                return self._send(400, {"error": "task, workflow and autonomous are required"})
+            if not isinstance(STATE["runs"], list):
+                return self._send(500, {"error": "state runs is not a list"})
+            run = {"id": f"run-{len(STATE['runs']) + 1}", "project": started[1], "task": body["task"],
+                   "workflow": body["workflow"], "autonomous": body["autonomous"], "status": "waiting"}
+            STATE["runs"].append(run)
+            return self._send(201, {"id": run["id"]})
         created = re.fullmatch(r"/cez/p/([^/]+)/automations", self.path)
         if created:
             definition = json.loads(raw)
@@ -197,6 +217,17 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         self._record("PATCH", raw)
+        issue = re.fullmatch(rf"/github/repos/{re.escape(STATE['control_repo'])}/issues/(\d+)", self.path)
+        if issue:
+            found = [i for i in STATE["issues"] if i["number"] == int(issue[1])]
+            if not found:
+                return self._send(404, {"message": "Not Found"})
+            update = json.loads(raw or b"{}")
+            if "body" in update:
+                found[0]["body"] = update["body"]
+            if "labels" in update:
+                found[0]["labels"] = [{"name": n} for n in update["labels"]]
+            return self._send(200, found[0])
         pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
         item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}") if pull else None
         if item is None:

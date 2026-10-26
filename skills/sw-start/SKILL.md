@@ -1,6 +1,6 @@
 ---
 name: sw-start
-description: Jednorazowa konfiguracja repozytorium sterującego sw-control dla roju agentów. Zakłada prywatne repozytorium, etykiety sw-*, kopię workflowu sw-sweep, issue sw-dziennik i godzinną automatyzację „sw: przegląd co godzinę”. Bezpieczne do ponownego uruchomienia. Model - chores.
+description: Jednorazowa konfiguracja repozytorium sterującego sw-control dla roju agentów. Zakłada prywatne repozytorium, etykiety sw-*, kopie workflowów sw-sweep i sw-ocena, issue sw-dziennik i godzinną automatyzację „sw: przegląd co godzinę”. Bezpieczne do ponownego uruchomienia. Model - chores.
 ---
 
 # sw-start

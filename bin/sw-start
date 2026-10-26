@@ -88,6 +88,7 @@ copy_file() { # copy_file <local path> <path in repo>
   info "zapisano $dest"
 }
 copy_file "$SW_ROOT/workflows/sw-sweep.yml" ".ai/cezar/workflows/sw-sweep.yml"
+copy_file "$SW_ROOT/workflows/sw-ocena.yml" ".ai/cezar/workflows/sw-ocena.yml"
 
 # 4. Journal issue.
 journal="$(gh api "repos/$repo/issues?labels=sw-dziennik&state=all&per_page=1" --jq '.[0].number // empty')" \

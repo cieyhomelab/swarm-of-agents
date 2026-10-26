@@ -19,6 +19,7 @@ state() { curl -fsS -X POST -d '{}' "$MOCK_URL/__control"; }
   [ "$(jq '.control_private' <<<"$s")" = "true" ]
   [ "$(jq '.labels | length' <<<"$s")" = "$(jq '.system | length' "${SW_HOME:-/work}"/config/labels.json)" ]
   [ "$(jq '.contents | has(".ai/cezar/workflows/sw-sweep.yml")' <<<"$s")" = "true" ]
+  [ "$(jq '.contents | has(".ai/cezar/workflows/sw-ocena.yml")' <<<"$s")" = "true" ]
   [ "$(jq '[.issues[] | select(.title == "sw-dziennik")] | length' <<<"$s")" -eq 1 ]
 }
 
