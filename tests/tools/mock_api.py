@@ -30,6 +30,8 @@ Routes:
   GET  /github/repos/<control>/issues/<n>   one issue of the control repository
   PATCH /github/repos/<control>/issues/<n>  body / labels (list of names) / state of that issue
   GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged})
+  GET  /github/repos/<o>/<r>/pulls?head=<o>:<branch>&state=open|all   open (not merged) PRs whose state entry has
+                                  that "branch" (state=all: merged ones too): [{number, html_url, head: {sha}}]
   PUT  /github/repos/<o>/<r>/pulls/<n>/merge  409 unless body.sha equals the head sha
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
@@ -105,6 +107,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"version": "0.0.0-mock", "projects": projects, "bootProject": "mock"})
         if self.path == "/api/v1/workspace/config":
             return self._send(200, {"resources": {"maxParallel": STATE["max_parallel"]}})
+        listing = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls\?(.*)", self.path)
+        if listing:
+            query = parse_qs(listing[2])
+            branch = query.get("head", [""])[0].partition(":")[2]
+            found = []
+            for key, item in STATE["pulls"].items():
+                repo, _, number = key.partition("#")
+                if repo == listing[1] and item.get("branch") == branch \
+                        and (query.get("state", ["open"])[0] == "all" or not item.get("merged", False)):
+                    found.append({"number": int(number), "html_url": f"https://github.com/{repo}/pull/{number}",
+                                  "head": {"sha": item["head_sha"]}})
+            return self._send(200, found)
         pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
         if pull:
             item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}")

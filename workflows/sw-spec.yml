@@ -1,0 +1,226 @@
+# Cezar workflow of the specification of a new application (spec S4, steps 2-5).
+# sw-create-repo seeds it in the application repository (.ai/cezar/workflows) and
+# starts it as an AUTONOMOUS task with the text "Specyfikacja aplikacji: <control>#<nr>".
+#
+# 1. sw-bezpieczenstwo (ustalenia) checks the sw:ustalenia comment BEFORE the analyst
+#    uses it: personal data or an excluded category there ends the task.
+# 2. sw-analityk (spec) writes .ai/specs/*.md; commit, push and a draft PR follow.
+# 3. sw-recenzent (a different model, a separate agent without the analyst's reasoning)
+#    gives "zatwierdzona" or "uwagi". "uwagi" starts a fix round of the analyst and a
+#    repeated review, at most specFixRounds times (the loop max below; a test keeps it
+#    equal to config/sw.json). The remarks travel in .ai/sw-run/uwagi.md.
+# 4. sw-bezpieczenstwo (pr) gives "pass" or "fail" on the specification in the PR.
+# 5. bin/sw-spec-pr runs sw-pr-body (verdicts and assumptions in the PR description),
+#    sw-merge spec (verdicts and run ids from node outputs, models from the Cezar run
+#    records, the SHA captured before the review) and sw-notify spec (the owner gets the
+#    PR link). A push after the verdicts changes the head and blocks the merge.
+#
+# Every ending without a merge (remarks left after the last round, failed security
+# review, unmet merge conditions, a failed agent) ends the task with status success on
+# purpose: cezar-push alerts the owner for every failed task, and the spec allows no
+# such messages. Pausing the project after the last round of remarks (S11) comes with
+# the next implementation step.
+#
+# Run as an autonomous task.
+
+version: 2
+name: sw-spec
+description: Analityk pisze specyfikację aplikacji, niezależny recenzent i przegląd bezpieczeństwa ją oceniają, a PR jest mergowany bez udziału właściciela.
+
+nodes:
+  - id: start
+    type: start
+
+  - id: sec-ustalenia
+    type: agent
+    name: Bezpieczeństwo (komentarz sw:ustalenia)
+    skill: sw-bezpieczenstwo
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-bezpieczenstwo i pracuj w trybie ustalenia.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "ls"
+      - "ls *"
+    verdicts: [pass, fail]
+
+  - id: analyst
+    type: agent
+    name: Analityk (specyfikacja)
+    skill: sw-analityk
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-analityk i pracuj w trybie spec: pierwszy zapis specyfikacji.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "ls"
+      - "ls *"
+    verdicts: [gotowa]
+
+  - id: commit
+    type: git.commit
+    name: Commit specyfikacji
+    message: "docs: specyfikacja aplikacji"
+
+  - id: push
+    type: git.push
+    name: Push specyfikacji
+
+  - id: draft-pr
+    type: github.draft-pr
+    name: PR ze specyfikacją
+    title: "docs: specyfikacja aplikacji"
+
+  - id: sha
+    type: check
+    name: SHA ocenianej wersji
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" sha
+
+  - id: review
+    type: agent
+    name: Recenzent (specyfikacja)
+    skill: sw-recenzent
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-recenzent i zrecenzuj specyfikację w trybie spec.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+    verdicts: [zatwierdzona, uwagi]
+
+  - id: rounds
+    type: loop
+    name: Rundy poprawek specyfikacji
+    max: 2
+
+  - id: fix
+    type: agent
+    name: Analityk (poprawka po uwagach)
+    skill: sw-analityk
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-analityk i pracuj w trybie spec: poprawka po uwagach recenzenta
+      (runda poprawek {{nodes.rounds.iteration}} z {{nodes.rounds.max}}). Uwagi są w .ai/sw-run/uwagi.md.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "ls"
+      - "ls *"
+    verdicts: [gotowa]
+
+  - id: commit-fix
+    type: git.commit
+    name: Commit poprawek
+    message: "docs: poprawki specyfikacji po recenzji"
+
+  - id: push-fix
+    type: git.push
+    name: Push poprawek
+
+  - id: security
+    type: agent
+    name: Bezpieczeństwo (specyfikacja w PR)
+    skill: sw-bezpieczenstwo
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-bezpieczenstwo i pracuj w trybie pr.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "git diff *"
+      - "ls"
+      - "ls *"
+    verdicts: [pass, fail]
+
+  - id: pr-body
+    type: check
+    name: Werdykty i założenia w opisie PR
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pr-body \
+        --werdykt "recenzent={{nodes.review.verdict}}@{{nodes.review.runId}}" \
+        --werdykt "bezpieczenstwo={{nodes.security.verdict}}@{{nodes.security.runId}}"
+
+  - id: merge
+    type: check
+    name: Merge specyfikacji
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" merge '{{nodes.sha.output}}' \
+        --werdykt "autor={{nodes.analyst.verdict}}@{{nodes.analyst.runId}}" \
+        --werdykt "recenzent={{nodes.review.verdict}}@{{nodes.review.runId}}" \
+        --werdykt "bezpieczenstwo={{nodes.security.verdict}}@{{nodes.security.runId}}"
+
+  - id: notify
+    type: check
+    name: Powiadomienie „specyfikacja gotowa”
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" notify
+
+  - id: done
+    type: end
+    name: Specyfikacja zmergowana
+    status: success
+
+  - id: stopped
+    type: end
+    name: Zatrzymane bez merge'u
+    status: success
+
+edges:
+  - { from: start, to: sec-ustalenia }
+  - { from: sec-ustalenia.pass, to: analyst }
+  - { from: sec-ustalenia.fail, to: stopped }
+  - { from: sec-ustalenia.failed, to: stopped }
+
+  - { from: analyst.gotowa, to: commit }
+  - { from: analyst.failed, to: stopped }
+  - { from: commit.done, to: push }
+  - { from: commit.nothing, to: stopped }
+  - { from: commit.failed, to: stopped }
+  - { from: push.done, to: draft-pr }
+  - { from: push.failed, to: stopped }
+  - { from: draft-pr.created, to: sha }
+  - { from: draft-pr.failed, to: stopped }
+
+  - { from: sha.pass, to: review }
+  - { from: sha.fail, to: stopped }
+  - { from: review.zatwierdzona, to: security }
+  - { from: review.uwagi, to: rounds }
+  - { from: review.failed, to: stopped }
+  - { from: rounds.repeat, to: fix }
+  - { from: rounds.exhausted, to: stopped }
+  - { from: fix.gotowa, to: commit-fix }
+  - { from: fix.failed, to: stopped }
+  - { from: commit-fix.done, to: push-fix }
+  - { from: commit-fix.nothing, to: sha }
+  - { from: commit-fix.failed, to: stopped }
+  - { from: push-fix.done, to: sha }
+  - { from: push-fix.failed, to: stopped }
+
+  - { from: security.pass, to: pr-body }
+  - { from: security.fail, to: stopped }
+  - { from: security.failed, to: stopped }
+  - { from: pr-body.pass, to: merge }
+  - { from: pr-body.fail, to: stopped }
+  - { from: merge.pass, to: notify }
+  - { from: merge.fail, to: stopped }
+  - { from: notify.pass, to: done }
+  - { from: notify.fail, to: done }

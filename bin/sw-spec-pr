@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# sw-spec-pr — glue between the sw-spec workflow and the PR of the specification.
+# It finds the open PR of the current branch, so the workflow never passes PR
+# numbers around, and runs the real scripts with the right arguments.
+#
+#   sw-spec-pr sha                   WYNIK: SHA <head sha>   (captured before each review)
+#   sw-spec-pr pr-body [args]        sw-pr-body <repo> <pr> <assumptions file> [args]
+#   sw-spec-pr merge <sha-line> [args]  sw-merge <repo> <pr> spec --sha <sha> [args]
+#   sw-spec-pr notify                sw-notify spec <repo> <pr> <title> <url>
+#
+# <sha-line> is the output of the "sha" node ("WYNIK: SHA <sha>"); the merge uses the
+# commit that the reviewers judged, so a later push blocks it (sw-merge compares heads).
+# The assumptions are the "## Założenia" section of the newest .ai/specs/*.md file.
+# Repository and branch come from the git checkout (origin, current branch);
+# SW_SPEC_REPO and SW_SPEC_BRANCH override them (tests).
+# Output ends with the line of the called script; STAN: BLAD <powód> with exit 1
+# when the PR cannot be found.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr sha|pr-body|merge|notify ..."
+cmd="$1"; shift
+
+repo="${SW_SPEC_REPO:-}"
+if [ -z "$repo" ] || [ -z "${SW_SPEC_BRANCH:-}" ]; then sw_require git; fi
+if [ -z "$repo" ]; then
+  url="$(git remote get-url origin 2>/dev/null)" || fail "brak zdalnego repozytorium origin"
+  repo="$(printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
+fi
+[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "niepoprawne repozytorium: $repo"
+branch="${SW_SPEC_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null)}"
+if [ -z "$branch" ] || [ "$branch" = HEAD ]; then fail "nie mozna ustalic galezi"; fi
+
+# the PR of the branch: number, head sha, html url. It is open until the merge, so the
+# notification after the merge looks among all PRs of the branch.
+pr_state=open; [ "$cmd" = notify ] && pr_state=all
+list="$(gh api "repos/$repo/pulls?head=${repo%%/*}:$branch&state=$pr_state" 2>/dev/null)" \
+  || fail "nie mozna odczytac PR galezi $branch w $repo"
+pr="$(jq -r '.[0].number // empty' <<<"$list")"
+head_sha="$(jq -r '.[0].head.sha // empty' <<<"$list")"
+pr_url="$(jq -r '.[0].html_url // empty' <<<"$list")"
+if ! [[ "$pr" =~ ^[0-9]+$ ]] || [ -z "$head_sha" ]; then fail "brak PR galezi $branch w $repo"; fi
+[ -n "$pr_url" ] || pr_url="https://github.com/$repo/pull/$pr"
+
+case "$cmd" in
+  sha)
+    echo "WYNIK: SHA $head_sha"
+    ;;
+  pr-body)
+    spec_file=""
+    for f in .ai/specs/*.md; do
+      [ -f "$f" ] || continue
+      if [ -z "$spec_file" ] || [ "$f" -nt "$spec_file" ]; then spec_file="$f"; fi
+    done
+    [ -n "$spec_file" ] || fail "brak pliku specyfikacji w .ai/specs"
+    assumptions="$(mktemp)"; trap 'rm -f "$assumptions"' EXIT
+    # the "## Założenia" section up to the next "## " heading
+    awk '/^## Założenia[[:space:]]*$/{on=1; next} /^## /{on=0} on' "$spec_file" > "$assumptions"
+    [ -s "$assumptions" ] || fail "specyfikacja $spec_file nie ma sekcji Założenia"
+    exec "$here/sw-pr-body" "$repo" "$pr" "$assumptions" "$@"
+    ;;
+  merge)
+    [ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr merge <wiersz-sha> [argumenty sw-merge]"
+    reviewed_sha="$(grep -oE '[0-9a-f]{7,40}' <<<"$1" | head -1)"; shift
+    [ -n "$reviewed_sha" ] || fail "brak SHA ocenionej wersji"
+    exec "$here/sw-merge" "$repo" "$pr" spec --sha "$reviewed_sha" "$@"
+    ;;
+  notify)
+    name="${repo#*/}"
+    exec "$here/sw-notify" spec "$repo" "$pr" "Specyfikacja gotowa: $name" "$pr_url"
+    ;;
+  *) sw_die "nieznane polecenie: $cmd" ;;
+esac
