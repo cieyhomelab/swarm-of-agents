@@ -41,6 +41,8 @@ Routes:
                                   of {name, status, conclusion}); empty for an unknown SHA
   GET  /github/repos/<o>/<r>/commits?sha=<branch>&per_page=1  [{commit: {committer: {date}}}] from state "commits"
                                   ("<o>/<r>@<branch>" -> ISO time of the last commit); empty for an unknown branch
+  GET/POST /github/repos/<o>/<r>/labels, /issues[?labels=&state=]  labels and issues of any repository other than
+                                  the control one (state "app_labels", "app_issues": "<o>/<r>" -> list)
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
@@ -69,6 +71,8 @@ DEFAULTS = {
     "hide_project": False,
     "labels": [],
     "issues": [],
+    "app_labels": {},
+    "app_issues": {},
     "contents": {},
     "pulls": {},
     "check_runs": {},
@@ -212,7 +216,36 @@ class Handler(BaseHTTPRequestHandler):
             if rest.startswith("contents/") and rest[9:] in STATE["contents"]:
                 entry = STATE["contents"][rest[9:]]
                 return self._send(200, {"sha": entry["sha"], "content": entry["content"]})
+        if self._app_repo("GET", url, b""):
+            return
         return self._send(404, {"message": "Not Found"})
+
+    def _app_repo(self, method, url, raw):
+        """Labels and issues of an application repository; True when the request was answered."""
+        match = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/(labels|issues)", url.path)
+        if not match or match[1] == STATE["control_repo"]:
+            return False
+        repo, kind = match[1], match[2]
+        if kind == "labels":
+            labels = STATE["app_labels"].setdefault(repo, [])
+            if method == "GET":
+                self._send(200, labels)
+            else:
+                labels.append({"name": json.loads(raw)["name"]})
+                self._send(201, labels[-1])
+            return True
+        issues = STATE["app_issues"].setdefault(repo, [])
+        if method == "GET":
+            wanted = parse_qs(url.query).get("labels", [None])[0]
+            state = parse_qs(url.query).get("state", ["open"])[0]
+            self._send(200, [i for i in issues if (wanted is None or wanted in [lb["name"] for lb in i["labels"]])
+                             and (state == "all" or i.get("state", "open") == state)])
+        else:
+            body = json.loads(raw)
+            issues.append({"number": len(issues) + 1, "title": body["title"], "body": body.get("body", ""),
+                           "state": "open", "labels": [{"name": n} for n in body.get("labels", [])]})
+            self._send(201, issues[-1])
+        return True
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -321,6 +354,8 @@ class Handler(BaseHTTPRequestHandler):
                          "labels": [{"name": n} for n in body.get("labels", [])]}
                 STATE["issues"].append(issue)
                 return self._send(201, issue)
+        if self._app_repo("POST", urlsplit(self.path), raw):
+            return
         return self._send(404, {"message": "Not Found"})
 
     def do_PATCH(self):

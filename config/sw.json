@@ -1,5 +1,6 @@
 {
   "stage": 1,
+  "multiModule": false,
   "cycleHours": 1,
   "maxParallelAgents": 3,
   "projectTimeLimitHours": 168,
