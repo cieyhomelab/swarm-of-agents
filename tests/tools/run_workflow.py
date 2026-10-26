@@ -7,7 +7,8 @@ by sw-sweep and sw-spec: start, end, check (bash command, ports pass/fail), if (
 (replaced by the executable in $MOCK_AGENT, called with the node id and the loop
 iteration; its last stdout line is the verdict, a non-zero exit is port `failed`;
 an agent without verdicts leaves through `done`), git.commit / git.push / github.draft-pr
-(no-ops that leave through done / done / created; the executable in $MOCK_GIT, when set,
+(no-ops that leave through done / done / created; github.wait-ci leaves through green
+or the port printed by the executable in $MOCK_CI; the executable in $MOCK_GIT, when set,
 is called with the node id and a non-zero exit is port `failed`).
 In a check command the placeholders {{nodes.<id>.verdict|runId|output}} are replaced:
 the verdict is the last agent output, the run id is the node id (tests seed the
@@ -81,6 +82,16 @@ def main(path):
             hook = os.environ.get("MOCK_GIT")
             if hook and subprocess.run([hook, current]).returncode != 0:
                 port = "failed"
+        elif kind == "github.wait-ci":
+            # the executable in $MOCK_CI, when set, is called with the node id and the number
+            # of runs so far; its last stdout line is the port (green | red | timeout)
+            loops["ci"] = loops.get("ci", 0) + 1
+            hook = os.environ.get("MOCK_CI")
+            port = "green"
+            if hook:
+                result = subprocess.run([hook, current, str(loops["ci"])], capture_output=True, text=True)
+                lines = result.stdout.strip().splitlines()
+                port = "failed" if result.returncode != 0 or not lines else lines[-1]
         else:
             raise SystemExit(f"run_workflow: unsupported node type {kind}")
         print(f"TRACE {current} {port}")

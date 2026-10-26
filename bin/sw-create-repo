@@ -12,7 +12,7 @@
 #      when the repository exists on GitHub by now. An adopted repository is
 #      registered with POST /api/v1/projects/checkout, unless Cezar knows it;
 #   3. seeds README.md (link to the idea issue), .gitignore (.ai/sw-run/) and, when the checkout has it,
-#      workflows/sw-spec.yml as .ai/cezar/workflows/sw-spec.yml; sets the topic
+#      workflows/sw-spec.yml and workflows/sw-build.yml as .ai/cezar/workflows/*.yml; sets the topic
 #      "sw-projekt" and the project's maxParallel (config "maxParallelAgents");
 #      Before every POST create the candidate name is saved in the issue meta
 #      ("pendingRepo"); a run interrupted before the topic was set adopts it.
@@ -197,6 +197,10 @@ put_file .gitignore ".ai/sw-run/
 if [ -r "$SW_ROOT/workflows/sw-spec.yml" ]; then
   put_file .ai/cezar/workflows/sw-spec.yml "$(cat "$SW_ROOT/workflows/sw-spec.yml")
 " "chore: workflow sw-spec"
+fi
+if [ -r "$SW_ROOT/workflows/sw-build.yml" ]; then
+  put_file .ai/cezar/workflows/sw-build.yml "$(cat "$SW_ROOT/workflows/sw-build.yml")
+" "chore: workflow sw-build"
 fi
 
 repo_json="$(gh_repo "$name")" || fail "nie mozna odczytac repozytorium $owner/$name"

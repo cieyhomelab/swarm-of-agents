@@ -6,6 +6,7 @@
 #   sw-spec-pr sha                   WYNIK: SHA <head sha>   (captured before each review)
 #   sw-spec-pr pr-body [args]        sw-pr-body <repo> <pr> <assumptions file> [args]
 #   sw-spec-pr merge <sha-line> [args]  sw-merge <repo> <pr> spec --sha <sha> --gotowy [args]
+#   sw-spec-pr merge-kod <sha-line> [args]  sw-merge <repo> <pr> kod --sha <sha> --gotowy [args]  (sw-build)
 #   sw-spec-pr notify                sw-notify spec <repo> <pr> <title> <url>
 #   sw-spec-pr pause <powód>         sw-spec-pause <powód> --pr <url>  (the project is paused, S4/S11)
 #
@@ -26,7 +27,7 @@ sw_require gh jq
 
 fail() { echo "STAN: BLAD $*"; exit 1; }
 
-[ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr sha|pr-body|merge|notify|pause ..."
+[ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr sha|pr-body|merge|merge-kod|notify|pause ..."
 cmd="$1"; shift
 
 repo="${SW_SPEC_REPO:-}"
@@ -67,11 +68,12 @@ case "$cmd" in
     [ -s "$assumptions" ] || fail "specyfikacja $spec_file nie ma sekcji Założenia"
     exec "$here/sw-pr-body" "$repo" "$pr" "$assumptions" "$@"
     ;;
-  merge)
-    [ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr merge <wiersz-sha> [argumenty sw-merge]"
+  merge | merge-kod)
+    [ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr $cmd <wiersz-sha> [argumenty sw-merge]"
     reviewed_sha="$(grep -oE '[0-9a-f]{7,40}' <<<"$1" | head -1)"; shift
     [ -n "$reviewed_sha" ] || fail "brak SHA ocenionej wersji"
-    exec "$here/sw-merge" "$repo" "$pr" spec --sha "$reviewed_sha" --gotowy "$@"
+    merge_mode=spec; [ "$cmd" = merge-kod ] && merge_mode=kod
+    exec "$here/sw-merge" "$repo" "$pr" "$merge_mode" --sha "$reviewed_sha" --gotowy "$@"
     ;;
   notify)
     name="${repo#*/}"

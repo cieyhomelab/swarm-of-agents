@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# sw-build-start [<nr>] — the last step of the sw-spec workflow: what happens to the
+# project once its specification is merged. The stage switch is "stage" in config/sw.json
+# (default 1):
+#   - stage 1: the stage 1 exception, bin/sw-handover-sh hands the project to the sh-* chain;
+#   - stage 2: the project goes to the sw-build workflow (S5, spec "Przepływy" 3.7 / 5):
+#       1. the idea must be open, "sw-pomysl" with "sw-stan-specyfikacja" and "repo" and
+#          "projectId" in its <!-- sw:meta {...} --> block;
+#       2. the application repository must have a merged pull request (the specification);
+#       3. POST /api/v1/p/{projectId}/runs starts the autonomous task of the sw-build
+#          workflow (a live task with the same text, left by an interrupted run, is reused);
+#       4. ONE PATCH of the idea from a fresh read: "sw-stan-specyfikacja" gives way to
+#          "sw-stan-architektura", meta "buildRunId". The idea stays open: it is still the
+#          one active project. The task is started BEFORE the patch, so after a failed
+#          start the idea keeps its state and a repeated run tries again.
+# <nr> is the idea issue of the control repository; without it the link in the README of
+# the checkout in the working directory is used (sw-create-repo seeds it).
+#
+# Output: WYNIK: BUDOWA <runId> | WYNIK: POMINIETO <powód> (exit 0: nothing to start or
+# the specification is not merged yet); STAN: BLAD <powód> with exit 1 when Cezar or
+# GitHub fail. Stage 1 prints what sw-handover-sh prints.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+
+stage="$(jq -r '.stage // 1' "$SW_CONFIG" 2>/dev/null)" || stage=1
+if [ "$stage" -lt 2 ] 2>/dev/null; then exec "$here/sw-handover-sh" "$@"; fi
+
+sw_require gh jq curl python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+skip() { echo "WYNIK: POMINIETO $*"; exit 0; }
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+
+number="${1:-}"
+if [ -z "$number" ]; then
+  [ -r README.md ] || fail "brak numeru pomyslu i README.md z linkiem"
+  link="$(grep -oE "https://github\.com/${control//./\\.}/issues/[0-9]+" README.md | head -1)" || true
+  [ -n "$link" ] || fail "README.md nie ma linku do pomyslu w $control"
+  number="${link##*/}"
+fi
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-build-start [<numer issue>]"
+
+# read_issue — fresh JSON of the idea in $issue and its meta in $meta; status 1 when the
+# idea is not an open project waiting for the build.
+read_issue() {
+  issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+  meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
+    | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+    || fail "niepoprawne metadane issue $number"
+  printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == "sw-stan-specyfikacja")' >/dev/null
+}
+read_issue || skip "issue $number nie jest projektem w stanie sw-stan-specyfikacja czekajacym na budowe"
+
+repo="$(jq -r '.repo // empty' <<<"$meta")"
+project_id="$(jq -r '.projectId // empty' <<<"$meta")"
+if [ -z "$repo" ] || [ -z "$project_id" ]; then skip "issue $number nie ma repozytorium i projektu w metadanych"; fi
+[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "niepoprawne repozytorium: $repo"
+[[ "$project_id" =~ ^[A-Za-z0-9._-]+$ ]] || fail "niepoprawny projectId: $project_id"
+
+pulls="$(gh api "repos/$repo/pulls?state=closed&per_page=100" 2>/dev/null)" \
+  || fail "nie mozna odczytac PR repozytorium $repo"
+jq -e 'any(.[]?; (.merged_at // "") != "" or .merged == true)' <<<"$pulls" >/dev/null \
+  || skip "specyfikacja w $repo nie jest jeszcze zmergowana"
+
+task="Budowa aplikacji: $control#$number"
+runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
+  || fail "nie mozna odczytac zadan Cezara projektu $project_id"
+run_id="$(printf '%s' "$runs" | jq -r --arg t "$task" '
+  (if type == "array" then . else (.runs // []) end)
+  | map(select(.workflow == "sw-build" and .task == $t and (.status == "waiting" or .status == "running" or .status == "queued")))
+  | first.id // empty' 2>/dev/null)" || fail "niepoprawna lista zadan Cezara"
+if [ -z "$run_id" ]; then
+  out="$(jq -nc --arg t "$task" '{task: $t, workflow: "sw-build", autonomous: true}' | curl -sS --max-time 60 -w '\n%{http_code}' -X POST \
+    -H 'Content-Type: application/json' --data-binary @- "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
+    || fail "Cezar nie uruchomil zadania sw-build w projekcie $project_id"
+  http="${out##*$'\n'}"
+  [[ "$http" =~ ^2 ]] || fail "Cezar nie uruchomil zadania sw-build w projekcie $project_id (HTTP $http)"
+  run_id="$(jq -r '.id // empty' <<<"${out%$'\n'*}")"
+fi
+[ -n "$run_id" ] || fail "Cezar nie zwrocil identyfikatora zadania sw-build"
+sw_log "sw-build-start: zadanie sw-build $run_id w projekcie $project_id"
+
+# One PATCH from a fresh read: nothing else the idea holds is overwritten.
+read_issue || skip "issue $number zmienilo stan w trakcie uruchamiania budowy"
+meta="$(jq -c --arg r "$run_id" '. + {buildRunId: $r}' <<<"$meta")"
+new_body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(printf '%s' "$issue" | jq -r '.body // ""')")" \
+  || fail "nie mozna zlozyc nowej tresci issue $number"
+labels="$(printf '%s' "$issue" | jq -c '[.labels[].name | select(. != "sw-stan-specyfikacja")] + ["sw-stan-architektura"] | unique')"
+jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l}' \
+  | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna oznaczyc issue $number jako sw-stan-architektura"
+
+"$here/sw-log" "budowa: pomysł #$number: $repo w stanie architektura (zadanie sw-build $run_id)" >/dev/null \
+  || sw_log "nie mozna zapisac poczatku budowy w dzienniku"
+
+echo "WYNIK: BUDOWA $run_id"

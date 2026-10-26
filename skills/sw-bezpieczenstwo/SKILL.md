@@ -1,11 +1,11 @@
 ---
 name: sw-bezpieczenstwo
-description: Przegląd bezpieczeństwa roju. W trybie ustalenia sprawdza komentarz sw:ustalenia, zanim skorzysta z niego analityk. W trybie pr sprawdza specyfikację w PR pod kątem kategorii wykluczonych, danych osobowych i sekretów. Kończy werdyktem pass albo fail. Przegląd kodu i aplikacji dojdzie w etapach 2 i 3. Model - security.
+description: Przegląd bezpieczeństwa roju. W trybie ustalenia sprawdza komentarz sw:ustalenia, zanim skorzysta z niego analityk. W trybie pr sprawdza specyfikację w PR pod kątem kategorii wykluczonych, danych osobowych i sekretów. Kończy werdyktem pass albo fail. W trybie kod sprawdza kod i konfigurację PR architektury. Przegląd aplikacji dojdzie później. Model - security.
 ---
 
 # sw-bezpieczenstwo
 
-Działasz na modelu `security`, w węźle `agent` workflowu `sw-spec`, jako zadanie **autonomiczne**. Jesteś bramką: wydajesz `fail`, gdy znajdziesz którykolwiek problem z listy niżej. Nie poprawiasz niczego sam. Ten skill opisuje tryby `ustalenia` i `pr` (specyfikacja); przegląd kodu i aplikacji dojdzie później.
+Działasz na modelu `security`, w węźle `agent` workflowu `sw-spec`, jako zadanie **autonomiczne**. Jesteś bramką: wydajesz `fail`, gdy znajdziesz którykolwiek problem z listy niżej. Nie poprawiasz niczego sam. Ten skill opisuje tryby `ustalenia` i `pr` (specyfikacja) oraz `kod` (PR architektury w workflowu `sw-build`); przegląd aplikacji dojdzie później.
 
 ## Wejście
 
@@ -32,6 +32,16 @@ Wykonywany na gotowej specyfikacji. Czytasz najnowszy plik `.ai/specs/*.md` (`ls
 - sekrety w jakimkolwiek pliku PR;
 - kategorię wykluczoną w zakresie aplikacji (zestaw wzorcowy), także ukrytą w scenariuszu lub założeniu: obsługę prawdziwych pieniędzy, dawkowanie leków, diagnozę, porady inwestycyjne, treści wprowadzające w błąd lub skierowane przeciw osobom;
 - wymóg, który osłabia uwierzytelnienie lub ochronę danych użytkowników (dostęp bez logowania do danych prywatnych, przechowywanie haseł jawnym tekstem).
+
+## Tryb kod
+
+Wykonywany w workflowu `sw-build` (zadanie `Budowa aplikacji: <owner>/<repo>#<numer>`) na PR architektury. Czytasz wszystkie pliki zmienione względem gałęzi bazowej (`git diff origin/HEAD...HEAD`).
+
+`fail`, gdy znajdziesz:
+- sekrety (tokeny, hasła, klucze, adresy wewnętrzne) albo dane osobowe właściciela w jakimkolwiek pliku;
+- workflow CI, który wykonuje kod z niezaufanego źródła z dostępem do sekretów (np. `pull_request_target` z checkoutem kodu PR), pobiera i uruchamia skrypty bez przypięcia albo przekazuje sekrety do kroków, które ich nie potrzebują;
+- szkielet bez uwierzytelnienia tam, gdzie specyfikacja przewiduje dane prywatne, hasła przechowywane jawnym tekstem albo dostęp do danych bez logowania;
+- kategorię wykluczoną (zestaw wzorcowy) wprowadzoną przez architekturę.
 
 ## Wynik
 

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# sw-architektura-check — checks the architecture in the working directory (spec S5):
+# contract of every module (docs/kontrakty/*.md: udostępnia, wymaga, forma, scenariusze),
+# every scenario of the specification assigned to a module, and the CI workflow with a job
+# for each check-run of config "requiredChecks" that runs on pull_request. The sw-build
+# workflow runs it after the architect, so those criteria do not rest on the agent alone.
+# On problems they are written to .ai/sw-run/uwagi.md (the fix round of the architect reads
+# them) and printed after STAN: BLAD; exit 1. Without problems: WYNIK: OK, exit 0.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require jq python3
+
+required="$(jq -c '.requiredChecks // []' "$SW_CONFIG")" || sw_die "niepoprawny requiredChecks w konfiguracji"
+problems="$(python3 "$here/lib/sw_architektura.py" . "$required")" || { echo "STAN: BLAD blad modulu sprawdzania architektury"; exit 1; }
+if [ -z "$problems" ]; then
+  echo "WYNIK: OK"
+  exit 0
+fi
+mkdir -p .ai/sw-run
+awk '{print NR ". " $0}' <<<"$problems" > .ai/sw-run/uwagi.md
+echo "STAN: BLAD architektura niekompletna"
+printf '%s\n' "$problems"
+exit 1

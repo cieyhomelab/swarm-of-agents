@@ -1,0 +1,287 @@
+# Cezar workflow of the build of a new application (spec S5 one module, S8; stage 2).
+# bin/sw-build-start starts it as an AUTONOMOUS task in the application project once the
+# specification is merged (config/sw.json "stage" 2) with the text "Budowa aplikacji:
+# <control>#<nr>"; the project is then in sw-stan-architektura. sw-create-repo seeds the
+# file in the application repository (.ai/cezar/workflows).
+#
+# Every step starts with the check sw-limits (the "limits-*" nodes): over its time or usage
+# limit the project is paused (sw-pause) and the task ends.
+# 1. sw-architekt (one module): stack, docs/kontrakty/<module>.md, every scenario assigned
+#    to a module, skeleton and the CI workflow with the check-runs of requiredChecks;
+#    commit, push and a draft PR follow.
+#    bin/sw-architektura-check then verifies what must not rest on the agent alone: the
+#    contract sections, every scenario assigned to a module, the CI jobs named like
+#    requiredChecks; problems start a fix round (.ai/sw-run/uwagi.md) of the architect.
+# 2. sw-recenzent (mode kod, a different model than the architect) gives "approve" or
+#    "changes"; "changes" and a red CI start a fix round of the architect, at most
+#    fixRoundsPerPr times (the loop max below; a test keeps it equal to config/sw.json).
+#    The remarks travel in .ai/sw-run/uwagi.md.
+# 3. github.wait-ci waits for the CI of the pushed commit, sw-bezpieczenstwo (mode kod)
+#    gives "pass" or "fail".
+# 4. bin/sw-spec-pr merge-kod runs sw-merge kod: verdicts and run ids from node outputs,
+#    models from the Cezar run records, the SHA captured before the review, green
+#    check-runs of requiredChecks for that SHA.
+#
+# Every ending without a merge ends the task with status success on purpose (cezar-push
+# alerts the owner for every failed task, and the spec allows no such messages). The
+# exceptions are the pauses (S11): exhausted fix rounds and a failed security review go
+# through bin/sw-spec-pr pause (label sw-stan-wstrzymany, pauseReason, idea closed,
+# journal entry and one "blocked" notification). The PR stays unmerged.
+#
+# Run as an autonomous task.
+
+version: 2
+name: sw-build
+description: Architekt przygotowuje architekturę z jednym modułem, szkielet i CI, niezależna recenzja, CI i przegląd bezpieczeństwa oceniają PR, a sw-merge kod go merguje bez udziału właściciela.
+
+nodes:
+  - id: start
+    type: start
+
+  - id: limits-architect
+    type: check
+    name: Limity projektu (przed architektem)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: architect
+    type: agent
+    name: Architekt (jeden moduł)
+    skill: sw-architekt
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-architekt i pracuj w trybie architektura: pierwszy zapis.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+    verdicts: [gotowa]
+
+  - id: commit
+    type: git.commit
+    name: Commit architektury
+    message: "feat: architektura, moduł, szkielet i CI aplikacji"
+
+  - id: push
+    type: git.push
+    name: Push architektury
+
+  - id: draft-pr
+    type: github.draft-pr
+    name: PR architektury
+    title: "feat: architektura, moduł, szkielet i CI aplikacji"
+
+  - id: arch-check
+    type: check
+    name: Kontrakt, przypisanie scenariuszy i CI
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-architektura-check"
+
+  - id: sha
+    type: check
+    name: SHA ocenianej wersji
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" sha
+
+  - id: limits-review
+    type: check
+    name: Limity projektu (przed recenzją)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: review
+    type: agent
+    name: Recenzent (kod)
+    skill: sw-recenzent
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-recenzent i zrecenzuj PR architektury w trybie kod.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr diff *"
+      - "git diff *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+    verdicts: [approve, changes]
+
+  - id: ci
+    type: github.wait-ci
+    name: CI commita (check-runy requiredChecks)
+
+  - id: rounds
+    type: loop
+    name: Rundy poprawek architektury
+    max: 3
+
+  - id: limits-fix
+    type: check
+    name: Limity projektu (przed poprawką)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: fix
+    type: agent
+    name: Architekt (poprawka po uwagach albo czerwonym CI)
+    skill: sw-architekt
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-architekt i pracuj w trybie architektura: poprawka po uwagach recenzenta
+      albo po czerwonym CI (runda poprawek {{nodes.rounds.iteration}} z {{nodes.rounds.max}}).
+      Uwagi są w .ai/sw-run/uwagi.md. Gdy go nie ma, przyczyną jest czerwone CI: sprawdź je
+      poleceniem gh pr checks.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr checks *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+    verdicts: [gotowa]
+
+  - id: arch-check-fix
+    type: check
+    name: Kontrakt, przypisanie scenariuszy i CI (po poprawce)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-architektura-check"
+
+  - id: commit-fix
+    type: git.commit
+    name: Commit poprawek
+    message: "fix: poprawki architektury po recenzji albo CI"
+
+  - id: push-fix
+    type: git.push
+    name: Push poprawek
+
+  - id: security
+    type: agent
+    name: Bezpieczeństwo (kod w PR)
+    skill: sw-bezpieczenstwo
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-bezpieczenstwo i pracuj w trybie kod.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "git diff *"
+      - "ls"
+      - "ls *"
+    verdicts: [pass, fail]
+
+  - id: limits-merge
+    type: check
+    name: Limity projektu (przed merge'em)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: merge
+    type: check
+    name: Merge architektury (sw-merge kod)
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" merge-kod '{{nodes.sha.output}}' \
+        --werdykt "autor={{nodes.architect.verdict}}@{{nodes.architect.runId}}" \
+        --werdykt "recenzent={{nodes.review.verdict}}@{{nodes.review.runId}}" \
+        --werdykt "bezpieczenstwo={{nodes.security.verdict}}@{{nodes.security.runId}}"
+
+  - id: pause-rounds
+    type: check
+    name: Wstrzymanie projektu po wyczerpaniu rund poprawek
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'architektura: uwagi albo czerwone CI po wyczerpaniu rund poprawek'
+
+  - id: pause-security
+    type: check
+    name: Wstrzymanie projektu po porażce przeglądu bezpieczeństwa
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa architektury: fail'
+
+  - id: done
+    type: end
+    name: Architektura zmergowana
+    status: success
+
+  - id: stopped
+    type: end
+    name: Zatrzymane bez merge'u
+    status: success
+
+edges:
+  - { from: start, to: limits-architect }
+  - { from: limits-architect.pass, to: architect }
+  - { from: limits-architect.fail, to: stopped }
+
+  - { from: architect.gotowa, to: commit }
+  - { from: architect.failed, to: stopped }
+  - { from: commit.done, to: push }
+  - { from: commit.nothing, to: stopped }
+  - { from: commit.failed, to: stopped }
+  - { from: push.done, to: draft-pr }
+  - { from: push.failed, to: stopped }
+  - { from: draft-pr.created, to: arch-check }
+  - { from: draft-pr.failed, to: stopped }
+  - { from: arch-check.pass, to: sha }
+  - { from: arch-check.fail, to: rounds }
+
+  - { from: sha.pass, to: limits-review }
+  - { from: sha.fail, to: stopped }
+  - { from: limits-review.pass, to: review }
+  - { from: limits-review.fail, to: stopped }
+  - { from: review.approve, to: ci }
+  - { from: review.changes, to: rounds }
+  - { from: review.failed, to: stopped }
+
+  - { from: ci.green, to: security }
+  - { from: ci.red, to: rounds }
+  - { from: ci.timeout, to: stopped }
+  - { from: ci.failed, to: stopped }
+
+  - { from: rounds.repeat, to: limits-fix }
+  - { from: rounds.exhausted, to: pause-rounds }
+  - { from: limits-fix.pass, to: fix }
+  - { from: limits-fix.fail, to: stopped }
+  - { from: fix.gotowa, to: arch-check-fix }
+  - { from: arch-check-fix.pass, to: commit-fix }
+  - { from: arch-check-fix.fail, to: rounds }
+  - { from: fix.failed, to: stopped }
+  - { from: commit-fix.done, to: push-fix }
+  - { from: commit-fix.nothing, to: stopped }
+  - { from: commit-fix.failed, to: stopped }
+  - { from: push-fix.done, to: sha }
+  - { from: push-fix.failed, to: stopped }
+
+  - { from: security.pass, to: limits-merge }
+  - { from: security.fail, to: pause-security }
+  - { from: security.failed, to: stopped }
+  - { from: limits-merge.pass, to: merge }
+  - { from: limits-merge.fail, to: stopped }
+  - { from: merge.pass, to: done }
+  - { from: merge.fail, to: stopped }
+  - { from: pause-rounds.pass, to: stopped }
+  - { from: pause-rounds.fail, to: stopped }
+  - { from: pause-security.pass, to: stopped }
+  - { from: pause-security.fail, to: stopped }
