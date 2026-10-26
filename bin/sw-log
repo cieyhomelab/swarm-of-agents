@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# sw-log <tekst> — appends one event to the journal (issue "sw-dziennik" in the
+# control repository) as a single comment. Personal data and tokens are masked.
+# Prints "WYNIK: ZAPISANO" (exit 0); exit 1 when the entry could not be written.
+set -uo pipefail
+
+# shellcheck source=bin/lib/common.sh
+. "$(dirname "$0")/lib/common.sh"
+
+[ -n "${*:-}" ] || sw_die "uzycie: sw-log <tekst>"
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || sw_die "brak controlRepo w konfiguracji"
+journal="$(sw_journal_issue)" || sw_die "nie mozna odczytac issue dziennika"
+[ -n "$journal" ] || sw_die "brak issue sw-dziennik w $control (uruchom sw-start)"
+
+text="$(printf '%s' "$*" | sw_scrub)"
+jq -n --arg b "$text" '{body: $b}' \
+  | gh api -X POST "repos/$control/issues/$journal/comments" --input - >/dev/null \
+  || sw_die "nie mozna zapisac wpisu w dzienniku"
+
+echo "WYNIK: ZAPISANO"

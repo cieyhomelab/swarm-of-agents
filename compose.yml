@@ -22,5 +22,6 @@ services:
     environment:
       SW_CEZAR_URL: http://mock:8080
       FAKE_GH_API_URL: http://mock:8080
+      SW_PUSH_URL: http://mock:8080
       MOCK_URL: http://mock:8080
     working_dir: /work

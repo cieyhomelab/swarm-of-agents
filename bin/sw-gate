@@ -8,11 +8,20 @@
 # Further decisions (URUCHOM: SPEC, ...) are added by later implementation
 # steps; see the technical sections of the spec.
 #
+# Cycle counters, restart-proof because they live in the journal ("sw-dziennik"):
+#   - consecutive "STAN: BLAD" cycles: each is logged; after
+#     "noIdeaNotifyAfterCycles" of them in a row one "blocked" notification is
+#     sent; the first healthy cycle after a failure logs "STAN: OK";
+#   - consecutive "brak pomysłu" entries since the newest idea card: when the
+#     cycle is about to generate and the count reached "noIdeaNotifyAfterCycles",
+#     one "blocked" notification with a link to the journal is sent.
+# A "powiadomienie: ..." journal entry marks a sent notification (deduplication).
+#
 # Active project: open "sw-pomysl" issue in the control repository that is
 # "sw-w-ocenie", "sw-zatwierdzony" or has a "sw-stan-*" label other than
 # "sw-stan-wdrozony" / "sw-stan-wstrzymany". Projects already handed over to the
 # sh-* chain (repository with .ai/cezar/workflows/sh-delivery.yml) are left
-# alone. Read-only: changes nothing.
+# alone. Apart from the journal entries above it changes nothing.
 # Exit code 0 when the gate ran on a healthy runtime, 1 otherwise.
 set -uo pipefail
 
@@ -20,13 +29,63 @@ here="$(dirname "$0")"
 # shellcheck source=bin/lib/common.sh
 . "$here/lib/common.sh"
 
-if ! "$here/sw-doctor"; then
+control="$(jq -r '.controlRepo // empty' "$SW_CONFIG" 2>/dev/null)"
+control_name="${control#*/}"
+notify_after="$(jq -r '.noIdeaNotifyAfterCycles // 24' "$SW_CONFIG" 2>/dev/null)"
+[[ "$notify_after" =~ ^[0-9]+$ ]] && [ "$notify_after" -gt 0 ] || notify_after=24
+
+# journal_notify <marker> <title> — one "blocked" notification linking the journal,
+# then a marker entry so the next cycles stay silent. Best effort: a failure here
+# never changes the decision of the gate.
+journal_notify() {
+  local url="https://github.com/$control/issues/$journal"
+  if "$here/sw-notify" blocked "$control" "$journal" "$2" "$url" 2>/dev/null | grep -qx 'WYNIK: WYSLANO'; then
+    "$here/sw-log" "powiadomienie: $1" >/dev/null 2>&1 || sw_log "bramka: nie mozna zapisac znacznika powiadomienia"
+  fi
+}
+
+# journal_load — sets $journal and $comments (JSON array); status 1 when unavailable.
+journal_load() {
+  [ -n "$control" ] || return 1
+  journal="$(sw_journal_issue)" && [ -n "$journal" ] || return 1
+  comments="$(sw_journal_comments "$journal")" && [ -n "$comments" ] || return 1
+}
+
+# Failure cycle: log the STAN: BLAD line and count the failures in a row.
+note_failure() {
+  "$here/sw-log" "$1" >/dev/null 2>&1 || { sw_log "bramka: nie mozna zapisac w dzienniku"; return 0; }
+  journal_load || return 0
+  local streak
+  streak="$(printf '%s' "$comments" | jq -c '
+    map(if (.body | startswith("STAN: BLAD")) then "blad"
+        elif (.body | startswith("powiadomienie: STAN: BLAD")) then "marker"
+        else "other" end) as $k
+    | ([range(0; $k | length) | select($k[.] == "other")] | last // -1) as $b
+    | $k[$b + 1:] | {count: map(select(. == "blad")) | length, notified: (index("marker") != null)}')"
+  if [ "$(printf '%s' "$streak" | jq '.count')" -ge "$notify_after" ] \
+    && [ "$(printf '%s' "$streak" | jq '.notified')" = false ]; then
+    journal_notify "STAN: BLAD" "Blad srodowiska: $notify_after cykli z rzedu"
+  fi
+}
+
+# Healthy cycle after failures: close the streak in the journal.
+note_recovery() {
+  journal_load || return 0
+  if printf '%s' "$comments" | jq -e '
+      map(select(.body | startswith("powiadomienie: ") | not)) | last.body // "" | startswith("STAN: BLAD")' >/dev/null; then
+    "$here/sw-log" "STAN: OK" >/dev/null 2>&1 || sw_log "bramka: nie mozna zapisac w dzienniku"
+  fi
+}
+
+health="$("$here/sw-doctor")"
+doctor_status=$?
+[ -z "$health" ] || printf '%s\n' "$health"
+if [ "$doctor_status" -ne 0 ]; then
+  note_failure "$(printf '%s\n' "$health" | grep '^STAN: BLAD' | head -1)"
   echo "URUCHOM: NIC"
   exit 1
 fi
-
-control="$(jq -r '.controlRepo // empty' "$SW_CONFIG")"
-control_name="${control#*/}"
+note_recovery
 
 # Cezar project id of the control repository (health lists projects by name).
 project_id="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null \
@@ -76,6 +135,23 @@ issues="$(printf '%s' "$issues" | jq -c '
               or (startswith("sw-stan-") and . != "sw-stan-wdrozony" and . != "sw-stan-wstrzymany")))]' 2>/dev/null)" \
   || undecided "niepoprawna lista issues"
 
+# Idea generation is about to run: count the "brak pomysłu" entries since the
+# newest card and notify once when they reach the limit.
+note_no_idea() {
+  journal_load || return 0
+  local cards since state
+  cards="$(gh api --paginate "repos/$control/issues?labels=sw-pomysl&state=all&per_page=100" 2>/dev/null)" || return 0
+  since="$(printf '%s' "$cards" | jq -s '[.[] | (if type == "array" then .[] else . end) | select(.pull_request == null) | .created_at // empty] | max // ""')"
+  state="$(printf '%s' "$comments" | jq -c --argjson since "$since" '
+    map(select(.created_at > $since)) as $c
+    | {count: ($c | map(select(.body | startswith("brak pomysłu"))) | length),
+       notified: ($c | any(.body | startswith("powiadomienie: brak pomysłu")))}')"
+  if [ "$(printf '%s' "$state" | jq '.count')" -ge "$notify_after" ] \
+    && [ "$(printf '%s' "$state" | jq '.notified')" = false ]; then
+    journal_notify "brak pomysłu" "Brak pomysłów: $notify_after cykli z rzedu"
+  fi
+}
+
 active=0
 lost=""
 while IFS= read -r issue; do
@@ -110,5 +186,6 @@ if [ -n "$lost" ]; then
 elif [ "$active" -gt 0 ]; then
   echo "URUCHOM: NIC"
 else
+  note_no_idea
   echo "URUCHOM: GENERATOR"
 fi
