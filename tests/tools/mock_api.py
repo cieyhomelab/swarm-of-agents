@@ -35,6 +35,8 @@ Routes:
                                   [{number, html_url, head: {sha}, merged_at}]
   POST /github/repos/<o>/<r>/pulls/<n>/ready  takes the PR out of draft (gh pr ready)
   PUT  /github/repos/<o>/<r>/pulls/<n>/merge  405 while the PR is a draft, 409 unless body.sha equals the head sha
+  GET  /github/repos/<o>/<r>/commits/<sha>/check-runs  {check_runs: [...]} from state "check_runs" ("<o>/<r>@<sha>" -> list
+                                  of {name, status, conclusion}); empty for an unknown SHA
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
@@ -65,6 +67,7 @@ DEFAULTS = {
     "issues": [],
     "contents": {},
     "pulls": {},
+    "check_runs": {},
     "repo_files": [],
     "runs": [],
     "repos": {},
@@ -131,6 +134,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"message": "Not Found"})
             return self._send(200, {"number": int(pull[2]), "body": item.get("body", ""),
                                     "merged": item.get("merged", False), "draft": item.get("draft", False), "head": {"sha": item["head_sha"]}})
+        checks = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/commits/([^/?]+)/check-runs(?:\?.*)?", self.path)
+        if checks:
+            runs = STATE["check_runs"].get(f"{checks[1]}@{checks[2]}", [])
+            return self._send(200, {"total_count": len(runs), "check_runs": runs})
         if self.path == "/__requests":
             return self._send(200, REQUESTS)
         if self.path == "/github/user":

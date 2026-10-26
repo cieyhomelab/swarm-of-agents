@@ -84,6 +84,67 @@ merge() {
   [ "$(curl -fsS "$SW_CEZAR_URL/__requests" | jq '[.[] | select(.method == "PUT")] | length')" -eq 0 ]
 }
 
+kod() { run "$ROOT/bin/sw-merge" o/app 7 kod --projekt p1 "$@"; }
+green() {
+  control '{"check_runs": {"o/app@sha1": [{"name": "checks", "status": "completed", "conclusion": "success"},
+                                         {"name": "e2e", "status": "completed", "conclusion": "success"}]}}'
+}
+APPROVED=(--sha sha1 --werdykt autor=gotowa@author --werdykt recenzent=approve@rev --werdykt bezpieczenstwo=pass@sec)
+
+@test "kod: approve, pass and green required check-runs merge the PR" {
+  green
+  kod "${APPROVED[@]}"
+  [ "$status" -eq 0 ]
+  [ "$output" = "WYNIK: ZMERGOWANY" ]
+  [ "$(pull_state | jq .merged)" = "true" ]
+  [ "$(curl -fsS "$SW_CEZAR_URL/__requests" | jq '[.[] | select(.path | test("/commits/sha1/check-runs"))] | length')" -ge 1 ]
+}
+
+@test "kod: a missing named check-run blocks the merge" {
+  control '{"check_runs": {"o/app@sha1": [{"name": "checks", "status": "completed", "conclusion": "success"}]}}'
+  kod "${APPROVED[@]}"
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE check-e2e" ]
+  [ "$(pull_state | jq .merged)" = "false" ]
+}
+
+@test "kod: a failed check-run blocks the merge" {
+  control '{"check_runs": {"o/app@sha1": [{"name": "checks", "status": "completed", "conclusion": "failure"},
+                                         {"name": "e2e", "status": "completed", "conclusion": "success"}]}}'
+  kod "${APPROVED[@]}"
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE check-checks" ]
+}
+
+@test "kod: a repository without CI (no check-runs) is not merged" {
+  kod "${APPROVED[@]}"
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE check-checks,check-e2e" ]
+  [ "$(curl -fsS "$SW_CEZAR_URL/__requests" | jq '[.[] | select(.method == "PUT")] | length')" -eq 0 ]
+}
+
+@test "kod: check-runs of another SHA do not count" {
+  control '{"check_runs": {"o/app@old": [{"name": "checks", "status": "completed", "conclusion": "success"},
+                                        {"name": "e2e", "status": "completed", "conclusion": "success"}]}}'
+  kod "${APPROVED[@]}"
+  [ "$status" -eq 1 ]
+}
+
+@test "kod: reviewer on the author's model is not merged even with green checks" {
+  green
+  kod --sha sha1 --werdykt autor=gotowa@author --werdykt recenzent=approve@revopus --werdykt bezpieczenstwo=pass@sec
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE model-recenzent" ]
+}
+
+@test "kod: a push after the verdicts blocks the merge" {
+  green
+  control '{"pulls": {"o/app#7": {"head_sha": "sha2", "body": "x"}}}'
+  kod "${APPROVED[@]}"
+  [ "$status" -eq 1 ]
+  [ "${lines[-1]}" = "WYNIK: WARUNKI_NIESPELNIONE sha" ]
+}
+
 @test "sw-pr-body writes verdicts and assumptions, idempotently" {
   printf -- '- Założenie A\n- Założenie B\n' > "$WORK/zalozenia.md"
   for _ in 1 2; do
