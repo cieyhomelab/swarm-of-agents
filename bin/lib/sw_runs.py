@@ -8,7 +8,7 @@ Reads one JSON object on stdin:
   stalledAfterHours, retriesPerTask, autoResumeLimit   numbers from the configuration
   progress        {runId: ISO time of the last commit on the run's branch}
 Prints one JSON object: {"planWait": bool, "actions": [...]}. An action is
-  {"kind": "retry"|"resume", "run", "task", "workflow", "model", "reason", "stop"} (a new task to start;
+  {"kind": "retry"|"resume", "run", "task", "workflow", "model", "reason", "stop"} (a new task to start; a "cancelled" task without a successor is treated like a failed one;
   "stop" is true when the old task is still active and must be cancelled before the new one starts) or
   {"kind": "exhausted", "run", "reason"} (the project is to be paused).
 While any task waits for the plan limit ("autoResumeAt") nothing is retried or counted
@@ -73,6 +73,11 @@ def plan(data):
             continue
         if status == "failed":
             cause = "zadanie nieudane"
+        elif status == "cancelled":
+            # sw-limits cancels a stalled task before it creates the retry; when that creation
+            # failed the cancelled task is the only trace, so it counts as failed (a task nobody
+            # replaced is retried in the next cycle).
+            cause = "zadanie zatrzymane bez następcy"
         elif status in ("running", "waiting"):
             progress = last_progress(run, data.get("progress") or {})
             if progress is None or (now - progress).total_seconds() / 3600 < data["stalledAfterHours"]:

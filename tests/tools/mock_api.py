@@ -25,6 +25,7 @@ Routes:
                                               (list of records; a record with "project" is visible only there)
   POST /api/v1/p/<project>/runs/<id>/cancel   cancel a live task (status "cancelled"): {cancelled: bool}
   POST /api/v1/p/<project>/runs   create a task {task, autonomous, workflow?}: appended to state "runs"
+                                  (state "run_create_fail" = a status code makes it fail with that status)
                                   as {id "run-N", project, task, workflow, autonomous, status "waiting"}
   GET  /api/v1/p/<project>/runs/<id>/history  task messages, state "histories" (run id -> list of
                                               {role: "user"|"assistant", text}); 404 for an unknown run
@@ -79,6 +80,7 @@ DEFAULTS = {
     "create_fail": {},
     "repo_fail": {},
     "cancel_fail": None,
+    "run_create_fail": None,
     "create_race": {},
     "histories": {},
     "comments": {},
@@ -273,6 +275,8 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body.get("task"), str) or not isinstance(body.get("autonomous"), bool) \
                     or not isinstance(body.get("workflow", ""), str):
                 return self._send(400, {"error": "task and autonomous are required, workflow is optional"})
+            if STATE["run_create_fail"]:
+                return self._send(STATE["run_create_fail"], {"message": "Server Error"})
             if not isinstance(STATE["runs"], list):
                 return self._send(500, {"error": "state runs is not a list"})
             run = {"id": f"run-{len(STATE['runs']) + 1}", "project": started[1], "task": body["task"],
