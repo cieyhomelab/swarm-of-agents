@@ -207,3 +207,20 @@ journal_text() { state | jq -r '[.comments["1"][]?.body] | join("\n")'; }
   [ "$(app_runs | jq length)" -eq 1 ]
   [ "$(app_runs | jq -r '.[0].status')" = running ]
 }
+
+@test "S11 a stalled task cancelled when the new task could not be created is retried in the next cycle (#51)" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T01:00:00Z","task":"Zrob X"}]'
+  curl -fsS -X POST "$MOCK/__control" -d '{"run_create_fail": 500}' >/dev/null
+  run "$ROOT/bin/sw-limits" 5
+  [ "$status" -eq 1 ]
+  [[ "$output" == "STAN: BLAD nie mozna utworzyc zadania"* ]]
+  [ "$(app_runs | jq -r '.[0].status')" = cancelled ]
+  curl -fsS -X POST "$MOCK/__control" -d '{"run_create_fail": null}' >/dev/null
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: OK" ]
+  [ "$(app_runs | jq length)" -eq 2 ]
+  [[ "$(app_runs | jq -r '.[1].task')" == *"[ponowienie 1; zastępuje a]" ]]
+  run "$ROOT/bin/sw-limits" 5
+  [ "$(app_runs | jq length)" -eq 2 ]
+}

@@ -15,7 +15,8 @@
 #     task from the interrupted step, without using a retry;
 #   - a failed task, or one without a commit and a state change for "stalledAfterHours", is
 #     retried ("retriesPerTask") in a new task, after the old one is cancelled
-#     (POST …/runs/{id}/cancel; when that fails nothing is started); when retries run out the project is paused with
+#     (POST …/runs/{id}/cancel; when that fails nothing is started; a cancelled task nobody replaced, e.g. when
+#     creating the new one failed, is retried in the next cycle); when retries run out the project is paused with
 #     the cause and the last state.
 # Before anything is assigned, a variable billed outside the plan (API keys, gateways, cloud
 # providers; the list of sw-doctor) blocks it: nothing starts and the journal gets an entry.

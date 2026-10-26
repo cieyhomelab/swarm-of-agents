@@ -58,8 +58,17 @@ plan() {
   [ "$(jq '.actions | length' <<<"$output")" -eq 0 ]
 }
 
-@test "finished and cancelled tasks are left alone" {
-  run plan '[{"id":"a","status":"done","updatedAt":"2026-10-01T00:00:00Z"},{"id":"b","status":"cancelled"}]'
+@test "finished tasks are left alone" {
+  run plan '[{"id":"a","status":"done","updatedAt":"2026-10-01T00:00:00Z"}]'
+  [ "$(jq '.actions | length' <<<"$output")" -eq 0 ]
+}
+
+@test "a cancelled task without a successor is retried (no stop); a replaced one is left alone" {
+  run plan '[{"id":"a","status":"cancelled","task":"Zrob X"}]'
+  [ "$(jq -r '.actions[0].kind' <<<"$output")" = retry ]
+  [ "$(jq -r '.actions[0].stop' <<<"$output")" = false ]
+  [[ "$(jq -r '.actions[0].task' <<<"$output")" == "Zrob X"*"[ponowienie 1; zastępuje a]" ]]
+  run plan '[{"id":"a","status":"cancelled","task":"Zrob X"},{"id":"b","status":"waiting","task":"Zrob X\n\n[ponowienie 1; zastępuje a]"}]'
   [ "$(jq '.actions | length' <<<"$output")" -eq 0 ]
 }
 
