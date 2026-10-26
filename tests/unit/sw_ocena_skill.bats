@@ -64,3 +64,18 @@ PY
   run grep -E "^    model: $model\$" "$WF"
   [ "$status" -eq 0 ]
 }
+
+@test "the decision is applied by a check node running sw-ocena-wynik after the agent" {
+  run python3 - "$WF" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+nodes = {n["id"]: n for n in doc["nodes"]}
+edges = {(e["from"], e["to"]) for e in doc["edges"]}
+assert nodes["result"]["type"] == "check" and "bin/sw-ocena-wynik" in nodes["result"]["command"]
+assert ("analyst.done", "result") in edges
+assert ("analyst.failed", "result") not in edges
+assert ("result.pass", "done") in edges and ("result.fail", "degraded") in edges
+print("ok")
+PY
+  [ "$status" -eq 0 ]
+}

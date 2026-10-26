@@ -17,8 +17,10 @@ Routes:
                                               (list of records; a record with "project" is visible only there)
   POST /api/v1/p/<project>/runs   create a task {task, workflow, autonomous}: appended to state "runs"
                                   as {id "run-N", project, task, workflow, autonomous, status "waiting"}
+  GET  /api/v1/p/<project>/runs/<id>/history  task messages, state "histories" (run id -> list of
+                                              {role: "user"|"assistant", text}); 404 for an unknown run
   GET  /github/repos/<control>/issues/<n>   one issue of the control repository
-  PATCH /github/repos/<control>/issues/<n>  body / labels (list of names) of that issue
+  PATCH /github/repos/<control>/issues/<n>  body / labels (list of names) / state of that issue
   GET/PATCH /github/repos/<o>/<r>/pulls/<n>   PR from state "pulls" ("<o>/<r>#<n>" -> {head_sha, body, merged})
   PUT  /github/repos/<o>/<r>/pulls/<n>/merge  409 unless body.sha equals the head sha
   POST /__control                 change state, e.g. {"health_status": 503}
@@ -26,7 +28,7 @@ Routes:
 
 State keys: health_status, github_user (null = logged out), control_repo,
 control_private (null = repository missing), max_parallel, labels, issues,
-contents, repo_files (other repositories: "owner/name/path" entries), runs, automations (starts with automations of another agent chain, which
+histories, contents, repo_files (other repositories: "owner/name/path" entries), runs, automations (starts with automations of another agent chain, which
 must stay untouched).
 
 Usage: mock_api.py [--port N] [--port-file FILE]   (port 0 = random)
@@ -53,6 +55,7 @@ DEFAULTS = {
     "pulls": {},
     "repo_files": [],
     "runs": [],
+    "histories": {},
     "comments": {},
     "push_token": "test-token",
     "automations": [
@@ -105,6 +108,10 @@ class Handler(BaseHTTPRequestHandler):
             if STATE["control_private"] is None:
                 return self._send(404, {"message": "Not Found"})
             return self._send(200, {"full_name": STATE["control_repo"], "private": STATE["control_private"]})
+        history = re.fullmatch(r"/api/v1/p/([^/]+)/runs/([^/]+)/history", self.path)
+        if history:
+            messages = STATE["histories"].get(history[2])
+            return self._send(200, messages) if messages is not None else self._send(404, {"message": "Not Found"})
         run = re.fullmatch(r"/api/v1/p/([^/]+)/runs(?:/([^/]+))?", self.path)
         if run:
             runs = STATE["runs"]
@@ -227,6 +234,8 @@ class Handler(BaseHTTPRequestHandler):
                 found[0]["body"] = update["body"]
             if "labels" in update:
                 found[0]["labels"] = [{"name": n} for n in update["labels"]]
+            if "state" in update:
+                found[0]["state"] = update["state"]
             return self._send(200, found[0])
         pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
         item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}") if pull else None

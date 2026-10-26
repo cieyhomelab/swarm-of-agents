@@ -3,8 +3,8 @@
 # notification in cezar-pwa and talks to the analyst. The agent only reads the
 # card and writes one comment (sw:ustalenia or sw:odrzucenie); it cannot change
 # labels: gh issue edit and every other state change are outside bashAllowlist.
-# The decision is read from the task history and applied by a later step
-# (sw-ocena-wynik), never taken from the agent's own words.
+# The decision is read from the task history and applied by the check node
+# after the agent (sw-ocena-wynik), never taken from the agent's own words.
 #
 # A failed agent turn ends with status success on purpose (no failure
 # notification, see sw-sweep): the gate finds the unfinished evaluation and
@@ -33,6 +33,11 @@ nodes:
       - "mktemp"
       - "mktemp *"
 
+  - id: result
+    type: check
+    name: Decyzja właściciela
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-ocena-wynik"
+
   - id: done
     type: end
     status: success
@@ -43,5 +48,7 @@ nodes:
 
 edges:
   - { from: start, to: analyst }
-  - { from: analyst.done, to: done }
+  - { from: analyst.done, to: result }
+  - { from: result.pass, to: done }
+  - { from: result.fail, to: degraded }
   - { from: analyst.failed, to: degraded }

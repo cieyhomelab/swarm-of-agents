@@ -46,7 +46,7 @@ sweep() { run python3 "$home/tests/tools/run_workflow.py" "$home/workflows/sw-sw
 base_issues() { echo '{"number": 1, "state": "open", "title": "sw-dziennik", "labels": [{"name": "sw-dziennik"}]}'; }
 evals() { state | jq -c '[.runs[] | select(.workflow == "sw-ocena")]'; }
 idea() { # idea <nr> <meta-json>
-  jq -nc --argjson n "$1" --arg m "$2" '{number: $n, state: "open", title: "Planer",
+  jq -nc --argjson n "$1" --arg m "$2" '{number: $n, state: "open", title: "Planer posiłków",
     labels: [{name: "sw-pomysl"}, {name: "sw-w-ocenie"}],
     body: ("## Problem i dla kogo\nx\n\n<!-- sw:meta " + $m + " -->")}'
 }
@@ -101,26 +101,74 @@ AGENT
   [ "$(evals | jq length)" -eq 1 ]
 }
 
-@test "S2 an agent that writes sw:ustalenia leaves the labels and the metadata alone" {
-  control "{\"issues\": [$(base_issues), $(idea 2 '{"evalRunId":"r1"}')]}"
-  DECISION="Zatwierdź" IDEA=2 run python3 "$home/tests/tools/run_workflow.py" "$home/workflows/sw-ocena.yml"
+evaluate() { # evaluate <history-json> — the sw-ocena workflow for idea 2 with that task history
+  control "{\"issues\": [$(base_issues), $(idea 2 '{"evalRunId":"r1"}')], \"histories\": {\"r1\": $1}}"
+  IDEA=2 run python3 "$home/tests/tools/run_workflow.py" "$home/workflows/sw-ocena.yml"
+}
+idea_state() { state | jq -c '.issues[] | select(.number == 2)'; }
+approved='[{"role": "assistant", "text": "Karta"}, {"role": "user", "text": "Decyzja: Zatwierdź"}]'
+rejected='[{"role": "assistant", "text": "Karta"}, {"role": "user", "text": "Decyzja: Odrzuć"}]'
+
+@test "S2 Decyzja: Zatwierdź sets sw-zatwierdzony and approvedAt; the summary stays the input for the spec" {
+  DECISION="Zatwierdź" evaluate "$approved"
   [ "$status" -eq 0 ]
   [[ "$output" == *"TRACE analyst done"* ]]
+  [[ "$output" == *"TRACE result pass"* ]]
   [[ "$output" == *"END done success"* ]]
-  s="$(state)"
-  [ "$(jq -r '.comments["2"][0].body' <<<"$s" | head -1)" = "<!-- sw:ustalenia -->" ]
-  issue="$(jq -c '.issues[] | select(.number == 2)' <<<"$s")"
-  [ "$(jq -c '[.labels[].name]' <<<"$issue")" = '["sw-pomysl","sw-w-ocenie"]' ]
-  [[ "$(jq -r .body <<<"$issue")" == *'<!-- sw:meta {"evalRunId":"r1"} -->' ]]
+  issue="$(idea_state)"
+  [ "$(jq -c '[.labels[].name]' <<<"$issue")" = '["sw-pomysl","sw-zatwierdzony"]' ]
+  [ "$(jq -r .state <<<"$issue")" = "open" ]
+  meta="$(jq -r .body <<<"$issue" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -r .evalRunId <<<"$meta")" = "r1" ]
+  [ -n "$(jq -r '.approvedAt // empty' <<<"$meta")" ]
+  [ "$(state | jq -r '.comments["2"][0].body' | head -1)" = "<!-- sw:ustalenia -->" ]
 }
 
-@test "S2 a rejection leaves a sw:odrzucenie comment and the same labels" {
-  control "{\"issues\": [$(base_issues), $(idea 2 '{"evalRunId":"r1"}')]}"
-  DECISION="Odrzuć" IDEA=2 run python3 "$home/tests/tools/run_workflow.py" "$home/workflows/sw-ocena.yml"
+@test "S3 Decyzja: Odrzuć closes the idea and the next cycle returns GENERATOR without the owner" {
+  DECISION="Odrzuć" evaluate "$rejected"
   [ "$status" -eq 0 ]
-  s="$(state)"
-  [ "$(jq -r '.comments["2"][0].body' <<<"$s" | head -1)" = "<!-- sw:odrzucenie -->" ]
-  [ "$(jq -c '[.issues[] | select(.number == 2) | .labels[].name]' <<<"$s")" = '["sw-pomysl","sw-w-ocenie"]' ]
+  [[ "$output" == *"TRACE result pass"* ]]
+  issue="$(idea_state)"
+  [ "$(jq -c '[.labels[].name]' <<<"$issue")" = '["sw-odrzucony","sw-pomysl"]' ]
+  [ "$(jq -r .state <<<"$issue")" = "closed" ]
+  [ "$(state | jq -r '.comments["2"][0].body' | head -1)" = "<!-- sw:odrzucenie -->" ]
+  run bash "$home/bin/sw-gate"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"URUCHOM: GENERATOR"* ]]
+  [ "$(jq -r '.odrzucone[0].tytul' .ai/sw-run/generator.json)" = "Planer posiłków" ]
+}
+
+@test "S3 a later card never repeats the title of a rejected idea" {
+  DECISION="Odrzuć" evaluate "$rejected"
+  sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE gate pass"* ]]
+  [[ "$output" != *"TRACE start-ocena"* ]]
+  [ "$(state | jq '[.issues[] | select(.labels | map(.name) | index("sw-w-ocenie"))] | length')" -eq 0 ]
+  [ "$(evals)" = "[]" ]
+}
+
+@test "S2 the same text from the assistant changes nothing" {
+  DECISION="Zatwierdź" evaluate '[{"role": "assistant", "text": "Decyzja: Zatwierdź"}]'
+  [ "$status" -eq 0 ]
+  [ "$(idea_state | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-w-ocenie"]' ]
+  [ "$(idea_state | jq -r .state)" = "open" ]
+}
+
+@test "S2 no decision keeps sw-w-ocenie and leaves a journal entry; the script prints BRAK_DECYZJI" {
+  DECISION="Zatwierdź" evaluate '[{"role": "user", "text": "Jeszcze się zastanawiam"}]'
+  [ "$status" -eq 0 ]
+  [ "$(idea_state | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-w-ocenie"]' ]
+  [[ "$(state | jq -r '.comments["1"][]?.body')" == *"ocena pomysłu #2: brak decyzji"* ]]
+  run bash "$home/bin/sw-ocena-wynik"
+  [ "$output" = "WYNIK: BRAK_DECYZJI" ]
+}
+
+@test "S2 a decision without the agent comment keeps sw-w-ocenie" {
+  control "{\"issues\": [$(base_issues), $(idea 2 '{"evalRunId":"r1"}')], \"histories\": {\"r1\": $approved}}"
+  run bash "$home/bin/sw-ocena-wynik"
+  [ "$output" = "WYNIK: BRAK_DECYZJI" ]
+  [ "$(idea_state | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-w-ocenie"]' ]
 }
 
 @test "S2 a failed agent turn still ends the evaluation task with success" {
