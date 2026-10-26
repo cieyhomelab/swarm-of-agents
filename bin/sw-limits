@@ -14,7 +14,8 @@
 #   - a task that failed after Cezar's automatic resumes ("cezarAutoResumes", 12) gets a new
 #     task from the interrupted step, without using a retry;
 #   - a failed task, or one without a commit and a state change for "stalledAfterHours", is
-#     retried ("retriesPerTask") in a new task; when retries run out the project is paused with
+#     retried ("retriesPerTask") in a new task, after the old one is cancelled
+#     (POST …/runs/{id}/cancel; when that fails nothing is started); when retries run out the project is paused with
 #     the cause and the last state.
 # Before anything is assigned, a variable billed outside the plan (API keys, gateways, cloud
 # providers; the list of sw-doctor) blocks it: nothing starts and the journal gets an entry.
@@ -141,6 +142,11 @@ supervise() {
     if [ "$kind" = exhausted ]; then
       pause_project "$(jq -r .reason <<<"$action")"
       return $?
+    fi
+    # A stalled task is still active: cancel it first, so two tasks never share one branch.
+    if [ "$(jq -r '.stop // false' <<<"$action")" = true ]; then
+      curl -fsS --max-time 10 -X POST "$SW_CEZAR_URL/api/v1/p/$project_id/runs/$(jq -r .run <<<"$action")/cancel" >/dev/null 2>&1 \
+        || fail "nie mozna zatrzymac zadania $(jq -r .run <<<"$action"); ponowienie wstrzymane"
     fi
     jq -c '{task, workflow, autonomous: true} + (if .model != "" then {model} else {} end)' <<<"$action" \
       | curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- \

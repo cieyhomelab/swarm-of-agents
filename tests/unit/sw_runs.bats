@@ -62,3 +62,10 @@ plan() {
   run plan '[{"id":"a","status":"done","updatedAt":"2026-10-01T00:00:00Z"},{"id":"b","status":"cancelled"}]'
   [ "$(jq '.actions | length' <<<"$output")" -eq 0 ]
 }
+
+@test "a stalled active task is retried with stop (cancel first); a failed one is not stopped" {
+  run plan '[{"id":"a","status":"running","updatedAt":"2026-10-20T01:00:00Z","task":"t"},
+             {"id":"b","status":"failed","task":"u"}]'
+  [ "$(jq -r '.actions[0].stop' <<<"$output")" = true ]
+  [ "$(jq -r '.actions[1].stop' <<<"$output")" = false ]
+}

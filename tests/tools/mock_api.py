@@ -23,6 +23,7 @@ Routes:
                                   400 for Origin/X-Forwarded-For or a body other than {gate, repo, number, title<=100, url}; else 202
   GET  /api/v1/p/<project>/runs[/<id>]        Cezar tasks of one project, from state "runs"
                                               (list of records; a record with "project" is visible only there)
+  POST /api/v1/p/<project>/runs/<id>/cancel   cancel a live task (status "cancelled"): {cancelled: bool}
   POST /api/v1/p/<project>/runs   create a task {task, autonomous, workflow?}: appended to state "runs"
                                   as {id "run-N", project, task, workflow, autonomous, status "waiting"}
   GET  /api/v1/p/<project>/runs/<id>/history  task messages, state "histories" (run id -> list of
@@ -77,6 +78,7 @@ DEFAULTS = {
     "projects": [],
     "create_fail": {},
     "repo_fail": {},
+    "cancel_fail": None,
     "create_race": {},
     "histories": {},
     "comments": {},
@@ -254,6 +256,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, project)
         if self.path == "/m/push/gate":
             return self._push_gate(raw)
+        cancel = re.fullmatch(r"/api/v1/p/([^/]+)/runs/([^/]+)/cancel", self.path)
+        if cancel and STATE["cancel_fail"]:
+            return self._send(STATE["cancel_fail"], {"message": "Server Error"})
+        if cancel and isinstance(STATE["runs"], list):
+            found = [r for r in STATE["runs"] if r["id"] == cancel[2] and r.get("project", cancel[1]) == cancel[1]]
+            if not found:
+                return self._send(404, {"message": "Not Found"})
+            live = found[0].get("status") in ("queued", "running", "waiting")
+            if live:
+                found[0]["status"] = "cancelled"
+            return self._send(200, {"cancelled": live})
         started = re.fullmatch(r"/api/v1/p/([^/]+)/runs", self.path)
         if started:
             body = json.loads(raw or b"{}")
