@@ -187,6 +187,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(201, comment)
             if rest == "issues":
                 issue = {"number": len(STATE["issues"]) + 1, "title": body["title"],
+                         "body": body.get("body", ""), "state": "open",
                          "labels": [{"name": n} for n in body.get("labels", [])]}
                 STATE["issues"].append(issue)
                 return self._send(201, issue)

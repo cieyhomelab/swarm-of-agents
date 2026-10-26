@@ -67,3 +67,42 @@ sw_journal_comments() {
   gh api --paginate "repos/$control/issues/$1/comments?per_page=100" 2>/dev/null \
     | jq -sc '[.[] | (if type == "array" then .[] else . end) | {body: (.body // ""), created_at: (.created_at // "")}]'
 }
+
+# sw_norm — filter stdin: case-folded (Polish letters too), punctuation to spaces,
+# single spaces. Used to compare titles and problems of ideas.
+sw_norm() {
+  python3 -c 'import re, sys; print(re.sub(r"[\W_]+", " ", sys.stdin.read().casefold()).strip())'
+}
+
+# sw_rejected_ideas — rejected ideas (sw-pomysl + sw-odrzucony, any state) of the
+# control repository as one JSON array
+# [{numer, tytul, problem, wskazowki: [..]}]. "problem" is the card section
+# "Problem i dla kogo", "wskazowki" the redacted sw:odrzucenie comments.
+# Status 1 when GitHub cannot be read.
+sw_rejected_ideas() {
+  local control issues number hints out="[]" item hint
+  control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || return 1
+  issues="$(gh api --paginate "repos/$control/issues?labels=sw-odrzucony&state=all&per_page=100" 2>/dev/null \
+    | jq -sc '[.[] | (if type == "array" then .[] else . end)
+               | select(.pull_request == null and any(.labels[]?; .name == "sw-pomysl"))
+               | {numer: .number, tytul: (.title // ""),
+                  problem: ((.body // "") | split("## Problem i dla kogo\n") | (.[1] // "")
+                            | (split("\n## ")[0] // "") | (split("<!-- sw:meta")[0] // "")
+                            | sub("^\\s+"; "") | sub("\\s+$"; ""))}]')" \
+    || return 1
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    number="$(printf '%s' "$item" | jq -r .numer)"
+    hints="[]"
+    while IFS= read -r hint; do
+      [ -n "$hint" ] || continue
+      hint="$(printf '%s' "$hint" | jq -r . | sw_scrub)"
+      hints="$(jq -c --arg h "$hint" '. + [$h]' <<<"$hints")"
+    done < <(gh api --paginate "repos/$control/issues/$number/comments?per_page=100" 2>/dev/null \
+      | jq -c '(if type == "array" then .[] else . end) | .body // ""
+               | select(startswith("<!-- sw:odrzucenie -->"))
+               | sub("^<!-- sw:odrzucenie -->\\s*"; "") | gsub("\n"; " ")')
+    out="$(jq -c --argjson i "$item" --argjson h "$hints" '. + [$i + {wskazowki: $h}]' <<<"$out")"
+  done < <(printf '%s' "$issues" | jq -c '.[]')
+  printf '%s\n' "$out"
+}
