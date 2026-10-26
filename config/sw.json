@@ -9,6 +9,7 @@
   "ideaAttemptsPerCycle": 5,
   "noIdeaNotifyAfterCycles": 24,
   "stalledAfterHours": 3,
+  "cezarAutoResumes": 12,
   "githubOwner": "cieyhomelab",
   "controlRepo": "cieyhomelab/sw-control",
   "requiredChecks": ["checks", "e2e"],

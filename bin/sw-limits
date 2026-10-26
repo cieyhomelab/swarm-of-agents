@@ -6,7 +6,18 @@
 #     in the metadata, GET /api/v1/p/{id}/runs) against "projectUsageLimitUsd".
 # Only an active project is checked (open, "sw-zatwierdzony" or a "sw-stan-*" label other
 # than "sw-stan-wdrozony" / "sw-stan-wstrzymany"). SW_NOW (ISO) overrides the clock in tests.
-# Output: WYNIK: OK | WYNIK: WSTRZYMANY <powód> | WYNIK: POMINIETO <powód>;
+# Then the tasks of the project are supervised (spec S11, S12; bin/lib/sw_runs.py):
+#   - a task waiting for the plan limit ("autoResumeAt") puts "sw-czeka-na-limit" on the idea,
+#     retries are neither used nor started, and the label goes when the wait is over;
+#   - a task that failed after Cezar's automatic resumes ("cezarAutoResumes", 12) gets a new
+#     task from the interrupted step, without using a retry;
+#   - a failed task, or one without a commit and a state change for "stalledAfterHours", is
+#     retried ("retriesPerTask") in a new task; when retries run out the project is paused with
+#     the cause and the last state.
+# Before anything is assigned, a variable billed outside the plan (API keys, gateways, cloud
+# providers; the list of sw-doctor) blocks it: nothing starts and the journal gets an entry.
+# Output: WYNIK: OK | WYNIK: WSTRZYMANY <powód> | WYNIK: POMINIETO <powód> |
+# WYNIK: CZEKA-NA-LIMIT | WYNIK: ZABLOKOWANY <zmienne>;
 # STAN: BLAD <powód> with exit 1 when GitHub or Cezar cannot be read or the pause failed.
 set -uo pipefail
 
@@ -31,6 +42,19 @@ if ! printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[
   echo "WYNIK: POMINIETO issue $number nie jest aktywnym projektem"
   exit 0
 fi
+# Paid usage is never switched on: variables billed outside the plan stop every assignment.
+billed=""
+for var in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL \
+           CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY; do
+  [ -z "${!var:-}" ] || billed="${billed:+$billed }$var"
+done
+if [ -n "$billed" ]; then
+  "$here/sw-log" "zadanie nie wystartowało: ustawione zmienne rozliczane poza planem ($billed), projekt #$number" >/dev/null \
+    || sw_log "nie mozna zapisac blokady zmiennych w dzienniku"
+  echo "WYNIK: ZABLOKOWANY zmienne rozliczane poza planem: $billed"
+  exit 0
+fi
+
 meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
   | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
   || fail "niepoprawne metadane issue $number"
@@ -38,24 +62,93 @@ approved="$(jq -r '.approvedAt // "-"' <<<"$meta")"
 project_id="$(jq -r '.projectId // empty' <<<"$meta")"
 
 usage=0
+runs_list="[]"
 if [ -n "$project_id" ]; then
   [[ "$project_id" =~ ^[A-Za-z0-9._-]+$ ]] || fail "niepoprawny projectId w metadanych issue $number"
   runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
     || fail "nie mozna odczytac zadan projektu $project_id"
-  usage="$(printf '%s' "$runs" | jq -er '(if type == "array" then . else (.runs // []) end)
-    | map(.costUsd // 0 | numbers) | add // 0')" || fail "niepoprawna lista zadan projektu $project_id"
+  runs_list="$(printf '%s' "$runs" | jq -ec 'if type == "array" then . else (.runs // []) end')" \
+    || fail "niepoprawna lista zadan projektu $project_id"
+  usage="$(printf '%s' "$runs_list" | jq -er 'map(.costUsd // 0 | numbers) | add // 0')" \
+    || fail "niepoprawna lista zadan projektu $project_id"
 fi
+
+# journal <text> — a best-effort journal entry; a failure never changes the decision.
+journal() { "$here/sw-log" "$1" >/dev/null || sw_log "nie mozna zapisac w dzienniku: $1"; }
+
+# pause_project <reason> — pauses the idea through sw-pause; prints the final WYNIK line.
+pause_project() {
+  local out
+  out="$("$here/sw-pause" "$number" "$1")" || { printf '%s\n' "$out"; return 1; }
+  case "$out" in
+    "WYNIK: WSTRZYMANY") echo "WYNIK: WSTRZYMANY $1" ;;
+    *) printf '%s\n' "$out" ;;
+  esac
+}
+
+# set_wait_label <yes|no> — adds or drops "sw-czeka-na-limit" after a fresh read (idempotent).
+set_wait_label() {
+  local fresh labels
+  fresh="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+  if [ "$1" = yes ]; then
+    printf '%s' "$fresh" | jq -e 'any(.labels[]?; .name == "sw-czeka-na-limit")' >/dev/null && return 0
+    labels="$(printf '%s' "$fresh" | jq -c '[.labels[].name] + ["sw-czeka-na-limit"] | unique')"
+  else
+    printf '%s' "$fresh" | jq -e 'any(.labels[]?; .name == "sw-czeka-na-limit")' >/dev/null || return 0
+    labels="$(printf '%s' "$fresh" | jq -c '[.labels[].name | select(. != "sw-czeka-na-limit")]')"
+  fi
+  jq -nc --argjson l "$labels" '{labels: $l}' | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+    || fail "nie mozna zmienic etykiet issue $number"
+  if [ "$1" = yes ]; then journal "czeka na limit planu: pomysł #$number"; else journal "limit planu odnowiony: pomysł #$number"; fi
+}
+
+# supervise — plan limit label, retries and stalled tasks of the project (bin/lib/sw_runs.py).
+supervise() {
+  local progress="{}" repo stalled retries resumes plan wait id branch when action kind
+  repo="$(jq -r '.repo // empty' <<<"$meta")"
+  stalled="$(jq -er '.stalledAfterHours // 3' "$SW_CONFIG")" || fail "niepoprawny stalledAfterHours"
+  retries="$(jq -er '.retriesPerTask // 2' "$SW_CONFIG")" || fail "niepoprawny retriesPerTask"
+  resumes="$(jq -er '.cezarAutoResumes // 12' "$SW_CONFIG")" || fail "niepoprawny cezarAutoResumes"
+  if [ -n "$repo" ]; then
+    while IFS=$'\t' read -r id branch; do
+      [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || continue
+      when="$(gh api "repos/$repo/commits?sha=$branch&per_page=1" 2>/dev/null | jq -r '.[0].commit.committer.date // empty')" || when=""
+      [ -z "$when" ] || progress="$(jq -c --arg i "$id" --arg w "$when" '. + {($i): $w}' <<<"$progress")"
+    done < <(jq -r '.[] | select(.branch and (.status == "running" or .status == "waiting")) | [.id, .branch] | @tsv' <<<"$runs_list")
+  fi
+  plan="$(jq -nc --argjson r "$runs_list" --arg n "$now" --argjson s "$stalled" --argjson t "$retries" \
+      --argjson a "$resumes" --argjson p "$progress" \
+      '{runs: $r, now: $n, stalledAfterHours: $s, retriesPerTask: $t, autoResumeLimit: $a, progress: $p}' \
+    | python3 "$here/lib/sw_runs.py")" || fail "nie mozna sprawdzic zadan projektu $number"
+  wait="$(jq -r '.planWait' <<<"$plan")"
+  if [ "$wait" = true ]; then
+    set_wait_label yes
+    echo "WYNIK: CZEKA-NA-LIMIT"
+    return 0
+  fi
+  set_wait_label no
+  while IFS= read -r action; do
+    [ -n "$action" ] || continue
+    kind="$(jq -r .kind <<<"$action")"
+    if [ "$kind" = exhausted ]; then
+      pause_project "$(jq -r .reason <<<"$action")"
+      return $?
+    fi
+    jq -c '{task, workflow, autonomous: true} + (if .model != "" then {model} else {} end)' <<<"$action" \
+      | curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- \
+          "$SW_CEZAR_URL/api/v1/p/$project_id/runs" >/dev/null 2>&1 \
+      || fail "nie mozna utworzyc zadania ($kind) dla $(jq -r .run <<<"$action")"
+    journal "$(case "$kind" in resume) echo wznowienie;; *) echo ponowienie;; esac): pomysł #$number: $(jq -r .reason <<<"$action")"
+  done < <(jq -c '.actions[]' <<<"$plan")
+  echo "WYNIK: OK"
+}
 
 now="${SW_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 reason="$(python3 "$here/lib/sw_limits.py" "$approved" "$now" "$time_limit" "$usage" "$usage_limit")" \
   || fail "nie mozna sprawdzic limitow projektu $number"
 if [ -z "$reason" ]; then
-  echo "WYNIK: OK"
-  exit 0
+  supervise
+  exit $?
 fi
 
-out="$("$here/sw-pause" "$number" "$reason")" || { printf '%s\n' "$out"; exit 1; }
-case "$out" in
-  "WYNIK: WSTRZYMANY") echo "WYNIK: WSTRZYMANY $reason" ;;
-  *) printf '%s\n' "$out" ;;
-esac
+pause_project "$reason"

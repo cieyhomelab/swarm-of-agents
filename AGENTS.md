@@ -64,6 +64,7 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 | `ideaAttemptsPerCycle` | 5 | próby generowania w cyklu (S1) |
 | `noIdeaNotifyAfterCycles` | 24 | po tylu cyklach bez pomysłu jedno powiadomienie |
 | `stalledAfterHours` | 3 | brak postępu = zadanie nieudane (S11) |
+| `cezarAutoResumes` | 12 | automatyczne wznowienia Cezara po limicie planu; po ich wyczerpaniu `sw-limits` zakłada nowe zadanie od przerwanego kroku, bez zużywania ponowień (S12) |
 | `githubOwner`, `controlRepo` | `cieyhomelab`, `cieyhomelab/sw-control` | konto i repozytorium sterujące (musi być prywatne) |
 | `requiredChecks` | `["checks", "e2e"]` | nazwy check-runów wymaganych do merge (S8); ustawia architekt aplikacji w jej repozytorium |
 | `models.*` | `opus` / `sonnet` / `haiku` | model każdej roli; recenzja i bezpieczeństwo inne niż autor |
