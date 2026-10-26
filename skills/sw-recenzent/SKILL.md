@@ -51,3 +51,15 @@ Działasz w węźle `agent` workflowu `sw-build`, na PR architektury (zadanie `B
    - **Zakres:** brak logiki modułu ponad szkielet, brak sekretów i danych osobowych.
 3. Uwagi zapisz jak w trybie `spec` w `.ai/sw-run/uwagi.md` (numerowana lista; przy braku uwag jedno zdanie „brak uwag”).
 4. Werdykt jako ostatnia linia odpowiedzi: `approve` (brak uwag) albo `changes`. Nie edytujesz niczego poza `.ai/sw-run/uwagi.md`.
+
+### PR modułu
+
+Gdy prompt węzła mówi o PR modułu (po merge'u architektury), recenzujesz implementację inżyniera. Autor działa na innym modelu niż ty. Kontrola zamiast listy architektury:
+
+- **Kontrakt:** implementacja nie wychodzi poza `## Udostępnia`; kontrakt ma sekcję `## Pokrycie` (pozycja => plik testu), a każda pozycja „udostępnia” ma test, który sprawdza jej zachowanie, nie tylko istnienie.
+- **Scenariusze:** każdy scenariusz specyfikacji ma test E2E w `tests/e2e/` nazywający go identyfikatorem `S<n>`, bez `skip`, `pending` i `xfail`.
+- **Poprawność:** logika modułu spełnia kryteria akceptacji, obsługuje oczywiste błędy użytkownika, nie ma martwego kodu ani zakodowanych na sztywno wyników testów.
+- **CI i walidacja:** `.github/workflows/ci.yml` i `scripts/*.sh` nie zostały osłabione (usunięte kroki, obniżone progi, wyłączone testy).
+- **Zakres:** brak sekretów i danych osobowych, brak zmian w specyfikacji poza `## Założenia techniczne`.
+
+Uwagi i werdykt jak w trybie `kod` powyżej (`approve` albo `changes`).

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# sw-stan <z> <do> — moves the project of the build task from state <z> to <do> (spec "Projekt —
+# etykiety na issue pomysłu"): the states are the suffixes of the "sw-stan-*" labels
+# (architektura, implementacja, integracja, przeglad). ONE PATCH from a fresh read replaces
+# "sw-stan-<z>" with "sw-stan-<do>" and the sw-build workflow calls it at the transitions.
+# Only the forward step to the next state is allowed. The idea comes from the README of the
+# checkout in the working directory (sw-create-repo seeds it with the link).
+#
+# Output: WYNIK: STAN <do> | WYNIK: POMINIETO <powód> (exit 0: the idea is not in <z>, e.g.
+# the state is already <do> after a repeated run, or the project is paused);
+# STAN: BLAD <powód> with exit 1 when GitHub fails or the arguments are wrong.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[ $# -eq 2 ] || sw_die "uzycie: sw-stan <z> <do>"
+from="$1" to="$2"
+order=(architektura implementacja integracja przeglad)
+idx() { local i; for i in "${!order[@]}"; do [ "${order[$i]}" = "$1" ] && { echo "$i"; return 0; }; done; return 1; }
+fi="$(idx "$from")" || sw_die "nieznany stan: $from"
+ti="$(idx "$to")" || sw_die "nieznany stan: $to"
+[ "$ti" -eq $((fi + 1)) ] || sw_die "niedozwolone przejscie: $from -> $to"
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+[ -r README.md ] || fail "brak README.md z linkiem do pomyslu"
+link="$(grep -oE "https://github\.com/${control//./\\.}/issues/[0-9]+" README.md | head -1)" || true
+[ -n "$link" ] || fail "README.md nie ma linku do pomyslu w $control"
+number="${link##*/}"
+
+issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+if ! printf '%s' "$issue" | jq -e --arg f "sw-stan-$from" '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == $f)' >/dev/null; then
+  echo "WYNIK: POMINIETO issue $number nie jest otwartym projektem w stanie $from"
+  exit 0
+fi
+labels="$(printf '%s' "$issue" | jq -c --arg f "sw-stan-$from" --arg t "sw-stan-$to" '[.labels[].name | select(. != $f)] + [$t] | unique')"
+jq -nc --argjson l "$labels" '{labels: $l}' \
+  | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna przestawic issue $number na stan $to"
+
+"$here/sw-log" "budowa: pomysł #$number: stan $to" >/dev/null || sw_log "nie mozna zapisac zmiany stanu w dzienniku"
+echo "WYNIK: STAN $to"

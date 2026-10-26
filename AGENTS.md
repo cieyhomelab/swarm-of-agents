@@ -51,6 +51,14 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 - Obrazy bazowe pochodzą z `mirror.gcr.io` (odporność na limit Docker Hub).
 - Na VPS bramka przeglądu sh-skills usuwa zasoby `e2e-*` starsze niż 6 godzin, także te z tego repozytorium. To nieszkodliwe, ale przebieg E2E nie może trwać tak długo.
 
+## Budowa aplikacji (etap 2, `workflows/sw-build.yml`)
+- Po architekturze `sw-inzynier` implementuje jedyny moduł, a `sw-tester` ocenia E2E pełnej aplikacji. Stan projektu przestawia `bin/sw-stan` (`architektura` → `implementacja` → `integracja` → `przeglad`), po jednym kroku naprzód.
+- Konwencja pokrycia, którą sprawdza `bin/sw-pokrycie-check`:
+  - `modul`: kontrakt `docs/kontrakty/<modul>.md` ma sekcję `## Pokrycie` z linią `- <pozycja „Udostępnia”> => <plik testu>` dla każdej pozycji, a plik istnieje i nie jest pusty;
+  - `e2e`: każdy scenariusz specyfikacji (`### S<n>`) występuje jako identyfikator w jakimś pliku `tests/e2e/`, a w `tests/e2e/` nie ma `skip`, `pending`, `xfail`.
+- Poprawka po nieudanych testach E2E trafia do nowego PR modułu (recenzja, CI, bezpieczeństwo, `sw-merge kod`); rundy poprawek każdej pętli to `fixRoundsPerPr`.
+- Uwaga: gałąź zadania `sw-build` po merge'u architektury dostaje kolejne commity i drugi PR (to samo `git.draft-pr`); działanie na prawdziwym Cezarze trzeba potwierdzić według „Sprawdzenie na VPS”.
+
 ## Konfiguracja `config/sw.json`
 | Pole | Domyślnie | Znaczenie (specyfikacja) |
 |------|-----------|--------------------------|

@@ -8,7 +8,7 @@
 #   sw-spec-pr merge <sha-line> [args]  sw-merge <repo> <pr> spec --sha <sha> --gotowy [args]
 #   sw-spec-pr merge-kod <sha-line> [args]  sw-merge <repo> <pr> kod --sha <sha> --gotowy [args]  (sw-build)
 #   sw-spec-pr notify                sw-notify spec <repo> <pr> <title> <url>
-#   sw-spec-pr pause <powód>         sw-spec-pause <powód> --pr <url>  (the project is paused, S4/S11)
+#   sw-spec-pr pause <powód>         sw-spec-pause <powód> --pr <url>  (the project is paused, S4/S11; without an open PR no --pr)
 #
 # <sha-line> is the output of the "sha" node ("WYNIK: SHA <sha>"); the merge uses the
 # commit that the reviewers judged; --gotowy takes the draft PR out of draft just before
@@ -48,7 +48,15 @@ list="$(gh api "repos/$repo/pulls?head=${repo%%/*}:$branch&state=$pr_state" 2>/d
 pr="$(jq -r '.[0].number // empty' <<<"$list")"
 head_sha="$(jq -r '.[0].head.sha // empty' <<<"$list")"
 pr_url="$(jq -r '.[0].html_url // empty' <<<"$list")"
-if ! [[ "$pr" =~ ^[0-9]+$ ]] || [ -z "$head_sha" ]; then fail "brak PR galezi $branch w $repo"; fi
+if ! [[ "$pr" =~ ^[0-9]+$ ]] || [ -z "$head_sha" ]; then
+  # a pause may come after the last PR of the build was merged (failed E2E of the whole
+  # application): there is no open PR to point at, the project is paused all the same
+  if [ "$cmd" = pause ]; then
+    [ $# -ge 1 ] || sw_die "uzycie: sw-spec-pr pause <powod>"
+    exec "$here/sw-spec-pause" "$1"
+  fi
+  fail "brak PR galezi $branch w $repo"
+fi
 [ -n "$pr_url" ] || pr_url="https://github.com/$repo/pull/$pr"
 
 case "$cmd" in
