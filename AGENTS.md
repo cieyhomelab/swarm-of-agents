@@ -66,8 +66,14 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
   - `przydziel` czyta `maxParallelAgents` z `config/sw.json` przy każdym wywołaniu, ustawia go jako `maxParallel` projektu w Cezarze (`CEZ_PROJECT_ID`) i przenosi na `w-pracy` najwyżej tyle modułów, ile zostawia wolnych miejsc limit (niższy numer issue pierwszy); każdy moduł wypisuje jako `URUCHOM: <modul>`.
   - Moduł jest gotowy, gdy każdy moduł z jego `## Wymaga` ma kontrakt (issue), bo implementacja opiera się na kontrakcie, a nie na gotowym module.
   - `zmergowany <modul>` przenosi `w-pracy` na `zmergowany` i zamyka issue; `stan` liczy moduły w trzech stanach.
-- `workflows/sw-build.yml` woła `przydziel` węzłem `kierownik` przed inżynierem, a `zmergowany` węzłem `kierownik-merged` po merge'u PR modułu. Zadania modułów dla wielu inżynierów naraz zakłada agent `sw-kierownik` z linii `URUCHOM`; podpięcie ich do `sw-build` (węzły `dispatch`) i integracja to krok 3 etapu 3.
+- `workflows/sw-build.yml` woła `przydziel` węzłem `kierownik` przed inżynierem, a `zmergowany` węzłem `kierownik-merged` po merge'u PR modułu. Zadania modułów dla wielu inżynierów naraz zakłada agent `sw-kierownik` z linii `URUCHOM`; podpięcie ich do `sw-build` (węzły `dispatch`) to osobny krok etapu 3; integracja to sekcja „Integracja modułów”.
 - Testy: `tests/integration/sw_kierownik.bats`, `tests/e2e/kierownik.bats` i testy `S6` w `tests/e2e/build.bats`.
+
+## Integracja modułów (etap 3, krok 3, S7)
+- Po `sw-kierownik zmergowany` projekt przechodzi w `sw-stan-integracja` (`bin/sw-stan`), a `bin/sw-integracja gotowe` tworzy zadanie integracji tylko wtedy, gdy wszystkie issues modułów mają `sw-modul-zmergowany` (żaden nie czeka ani nie jest w pracy; co najmniej jeden istnieje).
+- `sw-integrator` (model `integrator`) składa moduły w aplikację: werdykt `zlozona` wysyła zmiany nowym PR (recenzja, CI, bezpieczeństwo, `sw-merge kod`), `bez-zmian` prowadzi prosto dalej. Pierwsze złożenie dzieje się najwyżej raz (`once-integ`).
+- `bin/sw-integracja spojnosc` sprawdza deterministycznie brak znaczników konfliktu scalania i to, że każde `- <modul>: <pozycja>` z `## Wymaga` jest w `## Udostępnia` wskazanego modułu. Konflikt (uwagi w `.ai/sw-run/uwagi.md`) to runda poprawek integratora (`rounds-integ`, `fixRoundsPerPr`, poprawka nowym PR); wyczerpane rundy wstrzymują projekt (`pause-rounds-integ`). Dopiero spójna aplikacja przechodzi do testów E2E i testera (S7), potem jak w etapie 2.
+- Testy: `tests/integration/sw_integracja.bats`, testy `S7` integracji w `tests/e2e/build.bats` i `tests/unit/sw_build.bats`. Włączenie wielu modułów (`multiModule`) wymaga jeszcze podpięcia równoległych zadań modułów do `sw-build`.
 
 ## Wdrożenie (etap 2, krok 5b)
 - Po zmergowanym raporcie z przeglądu `workflows/sw-build.yml` przestawia projekt na `sw-stan-wdrazanie` (`bin/sw-stan`) i uruchamia `bin/sw-deploy`; potem `bin/sw-wdrozony` ustawia `sw-stan-wdrozony`, zapisuje adres w metadanych pomysłu (`deployUrl`), zamyka issue pomysłu (generator rusza w następnym cyklu) i wysyła `sw-notify deployed` (tytuł z adresem, link do issue pomysłu).
