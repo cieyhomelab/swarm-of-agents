@@ -55,7 +55,7 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 - Po architekturze `sw-inzynier` implementuje jedyny moduł, a `sw-tester` ocenia E2E pełnej aplikacji. Stan projektu przestawia `bin/sw-stan` (`architektura` → `implementacja` → `integracja` → `przeglad`), po jednym kroku naprzód.
 - Konwencja pokrycia, którą sprawdza `bin/sw-pokrycie-check`:
   - `modul`: kontrakt `docs/kontrakty/<modul>.md` ma sekcję `## Pokrycie` z linią `- <pozycja „Udostępnia”> => <plik testu>` dla każdej pozycji, a plik istnieje i nie jest pusty;
-  - `e2e`: każdy scenariusz specyfikacji (`### S<n>`) występuje jako identyfikator w jakimś pliku `tests/e2e/`, a w `tests/e2e/` nie ma `skip`, `pending`, `xfail`.
+  - `e2e`: każdy scenariusz specyfikacji (`### S<n>`) występuje jako identyfikator w jakimś pliku `tests/e2e/`, a w `tests/e2e/` nie ma konstrukcji pomijających test (`skip` jako polecenie bats, `test.skip(`, `xit(`, `@pytest.mark.skip` itp.; samo słowo w nazwie czy asercji nie liczy się).
 - Poprawka po nieudanych testach E2E trafia do nowego PR modułu (recenzja, CI, bezpieczeństwo, `sw-merge kod`); rundy poprawek każdej pętli to `fixRoundsPerPr`.
 - Uwaga: gałąź zadania `sw-build` po merge'u architektury dostaje kolejne commity i drugi PR (to samo `git.draft-pr`); działanie na prawdziwym Cezarze trzeba potwierdzić według „Sprawdzenie na VPS”.
 
