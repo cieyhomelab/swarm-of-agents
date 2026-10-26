@@ -9,7 +9,7 @@ setup() {
   export SW_PUSH_URL="$MOCK_URL" SW_NOW=2026-10-20T12:00:00Z
   SW_PUSH_TOKEN_FILE="$(mktemp)"; export SW_PUSH_TOKEN_FILE
   printf 'test-token\n' > "$SW_PUSH_TOKEN_FILE"
-  SW_RUN_DIR="$(mktemp -d)"; export SW_RUN_DIR
+  SW_RUN_DIR="$(mktemp -d)"; export SW_RUN_DIR SW_STATE_DIR="$SW_RUN_DIR/state"
   bin="${SW_HOME:-/work}/bin"
 }
 

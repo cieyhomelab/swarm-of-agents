@@ -15,8 +15,8 @@
 #     task from the interrupted step, without using a retry;
 #   - a failed task, or one without a commit and a state change for "stalledAfterHours", is
 #     retried ("retriesPerTask") in a new task, after the old one is cancelled
-#     (POST …/runs/{id}/cancel; when that fails nothing is started; a cancelled task nobody replaced, e.g. when
-#     creating the new one failed, is retried in the next cycle); when retries run out the project is paused with
+#     (POST …/runs/{id}/cancel; when that fails nothing is started; a task cancelled by sw-limits (recorded in
+#     SW_STATE_DIR/limits-stopped before the call) that nobody replaced, e.g. when creating the new one failed, is retried in the next cycle); when retries run out the project is paused with
 #     the cause and the last state.
 # Before anything is assigned, a variable billed outside the plan (API keys, gateways, cloud
 # providers; the list of sw-doctor) blocks it: nothing starts and the journal gets an entry.
@@ -114,7 +114,7 @@ set_wait_label() {
 
 # supervise — plan limit label, retries and stalled tasks of the project (bin/lib/sw_runs.py).
 supervise() {
-  local progress="{}" repo stalled retries resumes plan wait id branch when action kind
+  local progress="{}" stopped stopped_file="${SW_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/swarm-of-agents}/limits-stopped" repo stalled retries resumes plan wait id branch when action kind
   repo="$(jq -r '.repo // empty' <<<"$meta")"
   stalled="$(jq -er '.stalledAfterHours // 3' "$SW_CONFIG")" || fail "niepoprawny stalledAfterHours"
   retries="$(jq -er '.retriesPerTask // 2' "$SW_CONFIG")" || fail "niepoprawny retriesPerTask"
@@ -126,9 +126,11 @@ supervise() {
       [ -z "$when" ] || progress="$(jq -c --arg i "$id" --arg w "$when" '. + {($i): $w}' <<<"$progress")"
     done < <(jq -r '.[] | select(.branch and (.status == "running" or .status == "waiting")) | [.id, .branch] | @tsv' <<<"$runs_list")
   fi
+  stopped="$(jq -Rsc 'split("\n") | map(select(length > 0))' "$stopped_file" 2>/dev/null)" || stopped="[]"
+  [ -n "$stopped" ] || stopped="[]"
   plan="$(jq -nc --argjson r "$runs_list" --arg n "$now" --argjson s "$stalled" --argjson t "$retries" \
-      --argjson a "$resumes" --argjson p "$progress" \
-      '{runs: $r, now: $n, stalledAfterHours: $s, retriesPerTask: $t, autoResumeLimit: $a, progress: $p}' \
+      --argjson a "$resumes" --argjson p "$progress" --argjson c "$stopped" \
+      '{runs: $r, now: $n, stalledAfterHours: $s, retriesPerTask: $t, autoResumeLimit: $a, progress: $p, stoppedByLimits: $c}' \
     | python3 "$here/lib/sw_runs.py")" || fail "nie mozna sprawdzic zadan projektu $number"
   wait="$(jq -r '.planWait' <<<"$plan")"
   if [ "$wait" = true ]; then
@@ -145,7 +147,10 @@ supervise() {
       return $?
     fi
     # A stalled task is still active: cancel it first, so two tasks never share one branch.
+    # The id is recorded first: a cancelled task that is not on that list was stopped by hand.
     if [ "$(jq -r '.stop // false' <<<"$action")" = true ]; then
+      { mkdir -p "$(dirname "$stopped_file")" && jq -r .run <<<"$action" >>"$stopped_file"; } \
+        || fail "nie mozna zapisac znacznika zatrzymania zadania $(jq -r .run <<<"$action")"
       curl -fsS --max-time 10 -X POST "$SW_CEZAR_URL/api/v1/p/$project_id/runs/$(jq -r .run <<<"$action")/cancel" >/dev/null 2>&1 \
         || fail "nie mozna zatrzymac zadania $(jq -r .run <<<"$action"); ponowienie wstrzymane"
     fi
