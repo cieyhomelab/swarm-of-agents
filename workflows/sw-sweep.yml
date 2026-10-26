@@ -1,6 +1,9 @@
 # Cezar workflow run hourly by the "sw: przegląd co godzinę" automation in the
 # sw-control repository. The gate (bin/sw-gate, no agent) checks runtime health
-# and decides what to start in this cycle. Agents are added by later steps.
+# and decides what to start in this cycle. On "URUCHOM: GENERATOR" the sw-generator
+# agent tries up to ideaAttemptsPerCycle ideas (the loop max below; a test keeps it
+# equal to config/sw.json); a failed attempt is written to the journal, the first
+# good one becomes an idea card. Further agents are added by later steps.
 #
 # A broken runtime ends the task with status success on purpose: cezar-push
 # alerts the owner for every task entering "failed", and the spec allows no
@@ -22,6 +25,48 @@ nodes:
     name: Bramka przeglądu
     command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-gate"
 
+  - id: is-generator
+    type: if
+    name: Brak aktywnego projektu?
+    condition: { kind: output, ref: gate.output, op: contains, value: "URUCHOM: GENERATOR" }
+
+  - id: attempts
+    type: loop
+    name: Próby generowania pomysłu
+    max: 5
+
+  - id: generator
+    type: agent
+    name: Generator pomysłów
+    skill: sw-generator
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-generator i wykonaj jedną próbę (próba {{nodes.attempts.iteration}} z {{nodes.attempts.max}}).
+    allowedTools: [Read, Write, WebSearch, WebFetch]
+    bashAllowlist: []
+    verdicts: [karta, nieudana]
+
+  - id: card
+    type: check
+    name: Karta pomysłu
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-idea-card" karta
+
+  - id: card-rejected
+    type: if
+    name: Próba odrzucona przez skrypt?
+    condition: { kind: output, ref: card.output, op: contains, value: "WYNIK: NIEUDANA" }
+
+  - id: failed-attempt
+    type: check
+    name: Nieudana próba w dzienniku
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-idea-card" nieudana
+
+  - id: no-idea
+    type: check
+    name: Wpis „brak pomysłu”
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-log" "brak pomysłu"
+
   - id: done
     type: end
     status: success
@@ -32,5 +77,20 @@ nodes:
 
 edges:
   - { from: start, to: gate }
-  - { from: gate.pass, to: done }
+  - { from: gate.pass, to: is-generator }
+  - { from: is-generator.true, to: attempts }
+  - { from: is-generator.false, to: done }
+  - { from: attempts.repeat, to: generator }
+  - { from: attempts.exhausted, to: no-idea }
+  - { from: generator.karta, to: card }
+  - { from: generator.nieudana, to: failed-attempt }
+  - { from: generator.failed, to: failed-attempt }
+  - { from: card.pass, to: card-rejected }
+  - { from: card.fail, to: degraded }
+  - { from: card-rejected.true, to: attempts }
+  - { from: card-rejected.false, to: done }
+  - { from: failed-attempt.pass, to: attempts }
+  - { from: failed-attempt.fail, to: degraded }
+  - { from: no-idea.pass, to: done }
+  - { from: no-idea.fail, to: degraded }
   - { from: gate.fail, to: degraded }

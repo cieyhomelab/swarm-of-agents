@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# sw-idea-card <karta|nieudana> — settles one idea attempt of the sw-generator
+# agent, read from .ai/sw-run/proba.json (SW_RUN_DIR); the file is removed.
+#
+#   karta     proba.json = {tytul, problem, dla_kogo, co_robi,
+#             sprawdzenie: {podsumowanie, zrodla: [url..]},
+#             oceny: {wplyw, wykonalnosc, ryzyko}, rekomendacja, uzasadnienie}.
+#             Creates the idea card (issue with sw-pomysl + sw-w-ocenie) in the
+#             control repository. An incomplete card, a card without a source or
+#             a duplicate of a rejected idea (same title, or same problem for the
+#             same group) is a failed attempt instead.
+#   nieudana  proba.json = {przyczyna}. Logs the failed attempt.
+#
+# A failed attempt is written to the journal as "odrzucona próba: <przyczyna>".
+# Output: WYNIK: KARTA <nr> | WYNIK: NIEUDANA <przyczyna> | WYNIK: POMINIETO <powód>
+# (exit 0); STAN: BLAD <powód> with exit 1 when GitHub cannot be read or written.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+mode="${1:-}"
+case "$mode" in karta | nieudana) ;; *) sw_die "uzycie: sw-idea-card <karta|nieudana>" ;; esac
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+file="${SW_RUN_DIR:-.ai/sw-run}/proba.json"
+
+# attempt_failed <przyczyna> — journal entry, then the result line.
+attempt_failed() {
+  local reason
+  reason="$(printf '%s' "$1" | tr '\n' ' ' | cut -c1-300)"
+  "$here/sw-log" "odrzucona próba: $reason" >/dev/null || fail "nie mozna zapisac w dzienniku"
+  echo "WYNIK: NIEUDANA $reason"
+  exit 0
+}
+
+if [ -s "$file" ] && jq -e 'type == "object"' "$file" >/dev/null 2>&1; then
+  proba="$(cat "$file")"
+else
+  proba=""
+fi
+rm -f "$file" # never reuse the answer of an earlier attempt
+
+if [ "$mode" = nieudana ]; then
+  reason="$(printf '%s' "$proba" | jq -r '.przyczyna // empty' 2>/dev/null)"
+  attempt_failed "${reason:-agent nie podal przyczyny}"
+fi
+
+[ -n "$proba" ] || attempt_failed "niepelna karta: brak pliku proba.json"
+
+# Complete card? Every field of spec S1 step 5.
+missing="$(printf '%s' "$proba" | jq -r '
+  [ (if (.tytul // "" | type == "string" and (gsub("\\s"; "") | length) > 0) then empty else "tytul" end),
+    (if (.problem // "" | type == "string" and (gsub("\\s"; "") | length) > 0) then empty else "problem" end),
+    (if (.dla_kogo // "" | type == "string" and (gsub("\\s"; "") | length) > 0) then empty else "dla_kogo" end),
+    (if (.co_robi // "" | type == "string" and (gsub("\\s"; "") | length) > 0) then empty else "co_robi" end),
+    (if (.sprawdzenie.podsumowanie // "" | type == "string" and (gsub("\\s"; "") | length) > 0) then empty else "sprawdzenie.podsumowanie" end),
+    ((.oceny // {}) as $o | ["wplyw", "wykonalnosc", "ryzyko"][]
+      | select(($o[.] | type == "number" and . == floor and . >= 1 and . <= 5) | not) | "oceny." + .),
+    (if (.rekomendacja // "") | IN("rekomenduję", "nie rekomenduję") then empty else "rekomendacja" end),
+    (if (.uzasadnienie // "" | type == "string" and (gsub("\\s"; "") | length) > 0) then empty else "uzasadnienie" end)
+  ] | join(", ")')" || attempt_failed "niepelna karta: niepoprawny proba.json"
+[ -z "$missing" ] || attempt_failed "niepelna karta: $missing"
+
+sources="$(printf '%s' "$proba" | jq -r '[.sprawdzenie.zrodla[]? | strings | select(test("^https?://"))] | .[]')"
+[ -n "$sources" ] || attempt_failed "brak źródła potwierdzającego realność problemu"
+
+title="$(printf '%s' "$proba" | jq -r '.tytul')"
+problem="$(printf '%s' "$proba" | jq -r '.problem')"
+group="$(printf '%s' "$proba" | jq -r '.dla_kogo')"
+
+# Duplicate of a rejected idea: the same title, or the same problem for the same group.
+rejected="$(sw_rejected_ideas)" || fail "nie mozna odczytac odrzuconych pomyslow"
+norm_title="$(printf '%s' "$title" | sw_norm)"
+norm_problem="$(printf '%s\n\nDla kogo: %s' "$problem" "$group" | sw_norm)"
+while IFS=$'\t' read -r r_title r_problem; do
+  [ -n "$r_title$r_problem" ] || continue
+  if [ "$(printf '%s' "$r_title" | sw_norm)" = "$norm_title" ] \
+    || { [ -n "$r_problem" ] && [ "$(printf '%s' "$r_problem" | sw_norm)" = "$norm_problem" ]; }; then
+    attempt_failed "duplikat odrzuconego pomysłu"
+  fi
+done < <(printf '%s' "$rejected" | jq -r '.[] | [.tytul, (.problem | gsub("\n"; " "))] | @tsv')
+
+# An idea is already under evaluation: never a second card (the gate checks too).
+open="$(gh api "repos/$control/issues?labels=sw-w-ocenie&state=open&per_page=100" --jq 'length' 2>/dev/null)" \
+  || fail "nie mozna odczytac issues $control"
+if [ "${open:-0}" -gt 0 ]; then
+  echo "WYNIK: POMINIETO pomysl jest juz w ocenie"
+  exit 0
+fi
+
+body="$(printf '%s' "$proba" | jq -r '
+  "## Problem i dla kogo\n\(.problem)\n\nDla kogo: \(.dla_kogo)\n\n"
+  + "## Co robi aplikacja\n\(.co_robi)\n\n"
+  + "## Sprawdzenie w sieci\n\(.sprawdzenie.podsumowanie)\n\n"
+  + ([.sprawdzenie.zrodla[]? | strings | select(test("^https?://")) | "- \(.)"] | join("\n")) + "\n\n"
+  + "## Ocena\n- Wpływ na jakość życia, finanse lub zdrowie: \(.oceny.wplyw)/5\n"
+  + "- Wykonalność w limicie czasu projektu: \(.oceny.wykonalnosc)/5\n"
+  + "- Ryzyko: \(.oceny.ryzyko)/5\n\n"
+  + "## Rekomendacja\n\(.rekomendacja): \(.uzasadnienie)\n\n"
+  + "<!-- sw:meta {} -->"' | sw_scrub)"
+title="$(printf '%s' "$title" | tr '\n' ' ' | sw_scrub | cut -c1-120)"
+
+created="$(jq -n --arg t "$title" --arg b "$body" \
+  '{title: $t, body: $b, labels: ["sw-pomysl", "sw-w-ocenie"]}' \
+  | gh api -X POST "repos/$control/issues" --input - --jq .number 2>/dev/null)" \
+  || fail "nie mozna utworzyc karty pomyslu"
+[[ "$created" =~ ^[0-9]+$ ]] || fail "niepoprawna odpowiedz GitHuba przy tworzeniu karty"
+echo "WYNIK: KARTA $created"

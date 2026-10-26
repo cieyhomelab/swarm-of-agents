@@ -2,7 +2,7 @@
 # replaced by tests/fakes/gh, which talks to the mock API.
 FROM mirror.gcr.io/library/debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash bats ca-certificates curl jq python3 \
+ && apt-get install -y --no-install-recommends bash bats ca-certificates curl jq python3 python3-yaml \
  && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home vps
 COPY --chown=vps . /work

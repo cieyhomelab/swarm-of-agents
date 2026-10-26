@@ -141,3 +141,8 @@ YAML
   run python3 "$ROOT/tests/tools/validate_workflows.py" "$TMP/sw-l.yml"
   [ "$status" -eq 0 ]
 }
+
+@test "the attempt loop of sw-sweep equals ideaAttemptsPerCycle" {
+  max="$(python3 -c 'import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print([n["max"] for n in d["nodes"] if n["id"]=="attempts"][0])' "$ROOT/workflows/sw-sweep.yml")"
+  [ "$max" = "$(jq -r .ideaAttemptsPerCycle "$ROOT/config/sw.json")" ]
+}
