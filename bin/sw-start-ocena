@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # sw-start-ocena [nr] — starts the evaluation task of an idea card: a
 # non-autonomous Cezar task of the sw-ocena workflow in the control project
-# (POST /api/v1/p/{projectId}/runs) and stores its id as "evalRunId" in the
+# (POST /api/v1/p/{projectId}/runs; a live task with the same text, left by an
+# attempt whose evalRunId write failed, is reused) and stores its id as "evalRunId" in the
 # <!-- sw:meta {...} --> block of the issue (fresh read, then PATCH).
 #
 # Without <nr> the target is the idea under evaluation: the only open
@@ -50,11 +51,24 @@ project_id="${project_id:-${CEZ_PROJECT_ID:-}}"
 [ -n "$project_id" ] || fail "projekt $control_name nie jest zarejestrowany w Cezarze ($SW_CEZAR_URL)"
 
 # The task text carries no idea content: the agent reads the card itself.
-run_id="$(jq -n --arg t "Ocena pomysłu: $control#$number" \
-  '{task: $t, workflow: "sw-ocena", autonomous: false}' \
-  | curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data-binary @- \
-      "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null | jq -er '.id | strings | select(length > 0)')" \
-  || fail "Cezar nie utworzyl zadania sw-ocena"
+task_text="Ocena pomysłu: $control#$number"
+
+# A task left behind by an earlier attempt whose evalRunId write failed is reused
+# (same text, still alive) instead of starting a second one for the same idea.
+runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
+  || fail "nie mozna odczytac zadan Cezara"
+run_id="$(printf '%s' "$runs" | jq -r --arg t "$task_text" '
+  (if type == "array" then . else (.runs // []) end)
+  | map(select(.workflow == "sw-ocena" and .task == $t and (.status == "waiting" or .status == "running" or .status == "queued")))
+  | first.id // empty' 2>/dev/null)" || fail "niepoprawna lista zadan Cezara"
+
+if [ -z "$run_id" ]; then
+  run_id="$(jq -n --arg t "$task_text" \
+    '{task: $t, workflow: "sw-ocena", autonomous: false}' \
+    | curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data-binary @- \
+        "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null | jq -er '.id | strings | select(length > 0)')" \
+    || fail "Cezar nie utworzyl zadania sw-ocena"
+fi
 
 # evalRunId into the metadata, from a fresh read so that nothing else is overwritten.
 fresh="$(gh api "repos/$control/issues/$number" --jq '.body // ""' 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
