@@ -109,6 +109,25 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   [ "$(jq -cS . <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
 }
 
+@test "a name written before POST create is adopted by the next run (issue #37)" {
+  control "{\"issues\": [$(idea 7 'Planer')], \"create_fail\": {\"planer\": 500}}"
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 1 ]
+  [[ "$output" == "STAN: BLAD "* ]]
+  meta="$(state | jq -r '.issues[0].body' | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -r '.pendingRepo' <<<"$meta")" = planer ]
+  # Cezar created the repository, but the run stopped before the topic was set
+  empty='{"cieyhomelab/planer": {"private": true, "topics": [], "files": {}}}'
+  control "{\"repos\": $empty, \"create_fail\": {}}"
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "WYNIK: REPO cieyhomelab/planer proj-planer" ]
+  s="$(state)"
+  [ "$(jq -c '[.repos | keys[]]' <<<"$s")" = '["cieyhomelab/planer"]' ]
+  meta="$(jq -r '.issues[0].body' <<<"$s" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -cS . <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
+}
+
 @test "a claimed name that does not exist on GitHub is ignored and a new repository is created" {
   control "{\"issues\": [$(idea 7 'Planer' '{"pendingRepo":"planer"}')]}"
   run "$ROOT/bin/sw-create-repo" 7
