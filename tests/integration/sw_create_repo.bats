@@ -128,6 +128,21 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   [ "$(jq -cS . <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
 }
 
+@test "a name taken by somebody else is not left claimed after 409 (issue #39)" {
+  control "{\"issues\": [$(idea 7 'Planer')], \"create_fail\": {\"planer\": 409}, \"repo_fail\": {\"cieyhomelab/planer-2\": 503}}"
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 1 ]
+  meta="$(state | jq -r '.issues[0].body' | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -r '.pendingRepo // empty' <<<"$meta")" = "" ]
+  # somebody else's repository with that name exists now; the next run must leave it alone
+  foreign='{"cieyhomelab/planer": {"private": true, "topics": [], "files": {}}}'
+  control "{\"repos\": $foreign, \"create_fail\": {}, \"repo_fail\": {}}"
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "WYNIK: REPO cieyhomelab/planer-2 proj-planer-2" ]
+  [ "$(state | jq -c '.repos["cieyhomelab/planer"].topics')" = '[]' ]
+}
+
 @test "a claimed name that does not exist on GitHub is ignored and a new repository is created" {
   control "{\"issues\": [$(idea 7 'Planer' '{"pendingRepo":"planer"}')]}"
   run "$ROOT/bin/sw-create-repo" 7

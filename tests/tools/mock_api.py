@@ -9,7 +9,7 @@ Routes:
                                   state "projects" or "repos" gives 409; registers the repository in "repos"
   POST /api/v1/projects/checkout  register an existing repository {url} as a Cezar project (state "projects")
   PATCH /api/v1/projects/<id>     {maxParallel}: stored on the project in state "projects"
-  GET  /github/repos/<o>/<r>[/contents/<path>]   other repositories, state "repos" ("o/r" -> {private, topics,
+  GET  /github/repos/<o>/<r>[/contents/<path>]   (state "repo_fail" {"o/r": status} fails it with that status) other repositories, state "repos" ("o/r" -> {private, topics,
                                   files: {path: {sha, content}}}); PUT /contents/<path> creates a file (201;
                                   409 when it exists without its sha), PUT /topics {names} replaces the topics
   GET  /cez/p/<project>/automations           automations of one project (what `cez automation list` reads)
@@ -65,6 +65,7 @@ DEFAULTS = {
     "repos": {},
     "projects": [],
     "create_fail": {},
+    "repo_fail": {},
     "histories": {},
     "comments": {},
     "push_token": "test-token",
@@ -133,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
             found = [r for r in runs if r["id"] == run[2]]
             return self._send(200, found[0]) if found else self._send(404, {"message": "Not Found"})
         other = re.fullmatch(r"/github/repos/([^/]+/[^/]+)(?:/contents/(.+))?", self.path)
+        if other and other[1] in STATE["repo_fail"]:
+            return self._send(STATE["repo_fail"][other[1]], {"message": "Server Error"})
         if other and other[1] in STATE["repos"]:
             repo = STATE["repos"][other[1]]
             if other[2] is None:

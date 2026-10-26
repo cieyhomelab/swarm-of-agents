@@ -15,7 +15,8 @@
 #      workflows/sw-spec.yml as .ai/cezar/workflows/sw-spec.yml; sets the topic
 #      "sw-projekt" and the project's maxParallel (config "maxParallelAgents");
 #      Before every POST create the candidate name is saved in the issue meta
-#      ("pendingRepo"); a run interrupted before the topic was set adopts it;
+#      ("pendingRepo"); a run interrupted before the topic was set adopts it.
+#      After 409/500 (name taken by somebody else) the claim is dropped again;
 #   4. ONE PATCH of the issue from a fresh read: meta "repo"/"projectId", label
 #      sw-zatwierdzony -> sw-stan-specyfikacja.
 #
@@ -120,6 +121,15 @@ sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(print
     | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1
 }
 
+# release_claim <name> — the repository $name was not created by this run (taken
+# meanwhile): drop the claim, so that no later run adopts somebody else's repository.
+release_claim() {
+  read_issue || fail "issue $number zmienilo stan w trakcie tworzenia repozytorium $owner/$1"
+  [ "$(jq -r '.pendingRepo // empty' <<<"$meta")" = "$1" ] || return 0
+  write_issue "$(jq -c 'del(.pendingRepo)' <<<"$meta")" "$(printf '%s' "$issue" | jq -c '[.labels[].name]')" \
+    || fail "nie mozna zdjac nazwy $1 z issue $number"
+}
+
 name=""
 project_id=""
 suffix=1
@@ -150,11 +160,11 @@ while [ -z "$name" ]; do
   write_issue "$(jq -c --arg r "$candidate" '. + {pendingRepo: $r}' <<<"$meta")" \
     "$(printf '%s' "$issue" | jq -c '[.labels[].name]')" || fail "nie mozna zapisac nazwy $candidate w issue $number"
   cezar_post /api/v1/projects/create "$(jq -nc --arg n "$candidate" --arg o "$owner" '{name: $n, github: {owner: $o}}')"
-  if [ "$http" = 409 ]; then suffix=$((suffix + 1)); continue; fi
+  if [ "$http" = 409 ]; then release_claim "$candidate"; suffix=$((suffix + 1)); continue; fi
   if [ "$http" = 500 ]; then
     # github_create: a name taken meanwhile moves on, any other failure stops.
     gh_repo "$candidate" >/dev/null || fail "Cezar nie utworzyl projektu $candidate (HTTP 500)"
-    suffix=$((suffix + 1)); continue
+    release_claim "$candidate"; suffix=$((suffix + 1)); continue
   fi
   [[ "$http" =~ ^2 ]] || fail "Cezar nie utworzyl projektu $candidate (HTTP $http)"
   name="$candidate"
