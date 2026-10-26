@@ -49,11 +49,23 @@ decision() { run "$ROOT/bin/sw-gate"; echo "$output" | grep '^URUCHOM:'; }
 }
 
 @test "each active state blocks the generator" {
-  for label in sw-zatwierdzony sw-stan-specyfikacja sw-stan-architektura sw-stan-implementacja \
+  for label in sw-stan-specyfikacja sw-stan-architektura sw-stan-implementacja \
                sw-stan-integracja sw-stan-przeglad sw-stan-wdrazanie; do
     state "[$(issue 1 '{}' "$label")]"
     [ "$(decision)" = "URUCHOM: NIC" ]
   done
+}
+
+@test "an approved idea without a repository gives SPEC" {
+  state "[$(issue 7 '{}' sw-zatwierdzony)]"
+  [ "$(decision)" = "URUCHOM: SPEC 7" ]
+  state "[$(issue 9 '{}' sw-zatwierdzony), $(issue 7 '{"evalRunId":"r1"}' sw-zatwierdzony)]"
+  [ "$(decision)" = "URUCHOM: SPEC 7" ]
+}
+
+@test "an approved idea with a repository gives NIC" {
+  state "[$(issue 7 '{"repo":"cieyhomelab/app","projectId":"p1"}' sw-zatwierdzony)]"
+  [ "$(decision)" = "URUCHOM: NIC" ]
 }
 
 @test "idea under evaluation with a live task gives NIC" {

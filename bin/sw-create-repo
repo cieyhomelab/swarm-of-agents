@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# sw-create-repo <nr> — creates the private application repository of an approved
+# idea ("sw-zatwierdzony" without "repo" in the <!-- sw:meta {...} --> block).
+#
+# Steps, each one reading first so that an interrupted run can be repeated:
+#   1. name: the idea title in kebab-case; a taken name gets the first free suffix
+#      -2, -3, ... (GET repos/{owner}/{name}). A repository that has the topic
+#      "sw-projekt" and a README linking THIS issue is adopted (left by an
+#      interrupted run), every other existing repository counts as taken;
+#   2. POST /api/v1/projects/create (private repository + Cezar project); 409
+#      (folder_exists) moves on to the next name, 500 (github_create) does so only
+#      when the repository exists on GitHub by now. An adopted repository is
+#      registered with POST /api/v1/projects/checkout, unless Cezar knows it;
+#   3. seeds README.md (link to the idea issue) and, when the checkout has it,
+#      workflows/sw-spec.yml as .ai/cezar/workflows/sw-spec.yml; sets the topic
+#      "sw-projekt" and the project's maxParallel (config "maxParallelAgents");
+#   4. ONE PATCH of the issue from a fresh read: meta "repo"/"projectId", label
+#      sw-zatwierdzony -> sw-stan-specyfikacja.
+#
+# Output: WYNIK: REPO <owner/name> <projectId> | WYNIK: POMINIETO <powód> (exit 0,
+# the issue is not an approved idea without a repository); STAN: BLAD <powód> with
+# exit 1 when Cezar or GitHub fail.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq curl python3 base64
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+info() { sw_log "sw-create-repo: $*"; }
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+owner="$(jq -er '.githubOwner // empty' "$SW_CONFIG")" || fail "brak githubOwner w konfiguracji"
+max_parallel="$(jq -r '.maxParallelAgents // 3' "$SW_CONFIG")"
+[[ "$max_parallel" =~ ^[0-9]+$ ]] && [ "$max_parallel" -gt 0 ] || max_parallel=3
+
+number="${1:-}"
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-create-repo <numer issue>"
+
+# read_issue — fresh JSON of the issue in $issue; only an open approved idea
+# without a repository passes (status 1 = nothing to do).
+read_issue() {
+  issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+  printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == "sw-zatwierdzony")' >/dev/null || return 1
+  meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
+    | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+    || fail "niepoprawne metadane issue $number"
+  [ -z "$(jq -r '.repo // empty' <<<"$meta")" ]
+}
+read_issue || { echo "WYNIK: POMINIETO issue $number nie jest zatwierdzonym pomyslem bez repozytorium"; exit 0; }
+
+# kebab-case of the title: ASCII letters and digits, words joined with "-".
+base="$(printf '%s' "$issue" | jq -r '.title // ""' | python3 -c '
+import re, sys, unicodedata
+t = sys.stdin.read().casefold().replace("ł", "l")
+t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode()
+t = re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:60].strip("-")
+print(t or "aplikacja")')" || fail "nie mozna zbudowac nazwy repozytorium"
+issue_url="https://github.com/$control/issues/$number"
+
+# gh_repo <name> — repo JSON on stdout; status 0 = exists, 1 = missing, 2 = other failure.
+gh_repo() {
+  local err
+  err="$(mktemp)" || return 2
+  if gh api "repos/$owner/$1" 2>"$err"; then rm -f "$err"; return 0; fi
+  if grep -qE '404|Not Found' "$err"; then rm -f "$err"; return 1; fi
+  rm -f "$err"; return 2
+}
+
+# links_issue <name> — the README of the repository links THIS issue.
+links_issue() {
+  local content
+  content="$(gh api "repos/$owner/$1/contents/README.md" --jq '.content // ""' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null)" || return 1
+  printf '%s' "$content" | grep -qE "$(printf '%s' "$issue_url" | sed 's/[.\/]/\\&/g')([^0-9]|\$)"
+}
+
+# cezar_post <path> <json> — sets $resp (body) and $http (status); no subshell, so both survive.
+cezar_post() {
+  local out
+  resp=""; http=000
+  out="$(printf '%s' "$2" | curl -sS --max-time 60 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+    --data-binary @- "$SW_CEZAR_URL$1" 2>/dev/null)" || return 1
+  http="${out##*$'\n'}"
+  resp="${out%$'\n'*}"
+  [[ "$http" =~ ^2 ]]
+}
+
+project_of() { # project_of <name> — Cezar project id registered under that name
+  curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/health" 2>/dev/null \
+    | jq -r --arg n "$1" '[.projects[]? | select(.name == $n) | .id][0] // empty'
+}
+
+name=""
+project_id=""
+suffix=1
+while :; do
+  candidate="$base"; [ "$suffix" -eq 1 ] || candidate="$base-$suffix"
+  repo_json="$(gh_repo "$candidate")"; found=$?
+  if [ "$found" -eq 2 ]; then fail "nie mozna odczytac repozytorium $owner/$candidate"; fi
+  if [ "$found" -eq 0 ]; then
+    if jq -e '.topics // [] | index("sw-projekt")' <<<"$repo_json" >/dev/null 2>&1 && links_issue "$candidate"; then
+      info "adopcja repozytorium $owner/$candidate"
+      name="$candidate"
+      project_id="$(project_of "$name")"
+      if [ -z "$project_id" ]; then
+        cezar_post /api/v1/projects/checkout "$(jq -nc --arg u "https://github.com/$owner/$name" '{url: $u}')" \
+          || fail "Cezar nie zarejestrowal repozytorium $owner/$name (HTTP $http)"
+        project_id="$(jq -r '.id // .project.id // empty' <<<"$resp")"
+      fi
+      break
+    fi
+    suffix=$((suffix + 1)); continue
+  fi
+  cezar_post /api/v1/projects/create "$(jq -nc --arg n "$candidate" --arg o "$owner" '{name: $n, github: {owner: $o}}')"
+  if [ "$http" = 409 ]; then suffix=$((suffix + 1)); continue; fi
+  if [ "$http" = 500 ]; then
+    # github_create: a name taken meanwhile moves on, any other failure stops.
+    gh_repo "$candidate" >/dev/null || fail "Cezar nie utworzyl projektu $candidate (HTTP 500)"
+    suffix=$((suffix + 1)); continue
+  fi
+  [[ "$http" =~ ^2 ]] || fail "Cezar nie utworzyl projektu $candidate (HTTP $http)"
+  name="$candidate"
+  project_id="$(jq -r '.id // .project.id // empty' <<<"$resp")"
+  break
+done
+[ -n "$project_id" ] || fail "Cezar nie zwrocil identyfikatora projektu $owner/$name"
+
+# put_file <path> <content> <message> — creates the file unless it is already there.
+put_file() {
+  gh api "repos/$owner/$name/contents/$1" >/dev/null 2>&1 && return 0
+  jq -nc --arg m "$3" --arg c "$(printf '%s' "$2" | base64 -w0)" '{message: $m, content: $c}' \
+    | gh api -X PUT "repos/$owner/$name/contents/$1" --input - >/dev/null 2>&1 || fail "nie mozna zapisac $1 w $owner/$name"
+}
+
+title="$(printf '%s' "$issue" | jq -r '.title // ""' | tr '\n' ' ')"
+put_file README.md "# $title
+
+Aplikacja powstaje w roju agentów (swarm-of-agents). Pomysł i jego ocena: $issue_url
+" "docs: README z linkiem do pomysłu #$number"
+if [ -r "$SW_ROOT/workflows/sw-spec.yml" ]; then
+  put_file .ai/cezar/workflows/sw-spec.yml "$(cat "$SW_ROOT/workflows/sw-spec.yml")
+" "chore: workflow sw-spec"
+fi
+
+repo_json="$(gh_repo "$name")" || fail "nie mozna odczytac repozytorium $owner/$name"
+topics="$(jq -c '(.topics // []) + ["sw-projekt"] | unique' <<<"$repo_json")"
+jq -nc --argjson t "$topics" '{names: $t}' | gh api -X PUT "repos/$owner/$name/topics" --input - >/dev/null 2>&1 \
+  || fail "nie mozna ustawic tematu sw-projekt w $owner/$name"
+
+patched="$(jq -nc --argjson n "$max_parallel" '{maxParallel: $n}' | curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+  -X PATCH -H 'Content-Type: application/json' --data-binary @- "$SW_CEZAR_URL/api/v1/projects/$project_id" 2>/dev/null)"
+[[ "$patched" =~ ^2 ]] || fail "nie mozna ustawic maxParallel projektu $project_id (HTTP $patched)"
+
+# One PATCH from a fresh read: nothing else the issue holds is overwritten.
+read_issue || fail "issue $number zmienilo stan w trakcie tworzenia repozytorium $owner/$name"
+meta="$(jq -c --arg r "$owner/$name" --arg p "$project_id" '. + {repo: $r, projectId: $p}' <<<"$meta")"
+labels="$(printf '%s' "$issue" | jq -c '[.labels[].name | select(. != "sw-zatwierdzony")] + ["sw-stan-specyfikacja"] | unique')"
+new_body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(printf '%s' "$issue" | jq -r '.body // ""')")" \
+  || fail "nie mozna zlozyc nowej tresci issue $number"
+jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l}' \
+  | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna zapisac repozytorium w issue $number ($owner/$name)"
+
+echo "WYNIK: REPO $owner/$name $project_id"

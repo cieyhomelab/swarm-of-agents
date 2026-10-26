@@ -5,9 +5,11 @@
 #   URUCHOM: NIC          nothing to start in this cycle
 #   URUCHOM: GENERATOR    no active project: generate an idea
 #   URUCHOM: OCENA <nr>   idea <nr> is "sw-w-ocenie" but its evaluation task is lost
+#   URUCHOM: SPEC <nr>    idea <nr> is "sw-zatwierdzony" and has no "repo" in its metadata
+#                         (bin/sw-create-repo <nr> creates the application repository)
 # Before "URUCHOM: GENERATOR" it writes .ai/sw-run/generator.json (SW_RUN_DIR) in the
 # working directory: {"odrzucone": [{numer, tytul, problem, wskazowki: [..]}]}.
-# Further decisions (URUCHOM: SPEC, ...) are added by later implementation
+# Further decisions (URUCHOM: PROJEKT, ...) are added by later implementation
 # steps; see the technical sections of the spec.
 #
 # Cycle counters, restart-proof because they live in the journal ("sw-dziennik"):
@@ -156,6 +158,7 @@ note_no_idea() {
 
 active=0
 lost=""
+spec=""
 while IFS= read -r issue; do
   [ -n "$issue" ] || continue
   number="$(printf '%s' "$issue" | jq -r .number)"
@@ -181,10 +184,15 @@ while IFS= read -r issue; do
       *) [ -n "$lost" ] || lost="$number" ;;
     esac
   fi
+  if [ -z "$repo" ] && [ -z "$spec" ] && printf '%s' "$issue" | jq -e '.labels | index("sw-zatwierdzony")' >/dev/null; then
+    spec="$number"
+  fi
 done < <(printf '%s' "$issues" | jq -c 'sort_by(.number)[]')
 
 if [ -n "$lost" ]; then
   echo "URUCHOM: OCENA $lost"
+elif [ -n "$spec" ]; then
+  echo "URUCHOM: SPEC $spec"
 elif [ "$active" -gt 0 ]; then
   echo "URUCHOM: NIC"
 else
