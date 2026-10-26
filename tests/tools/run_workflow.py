@@ -5,7 +5,8 @@ Walks the graph of one workflow file the way Cezar does for the node types used
 by sw-sweep: start, end, check (bash command, ports pass/fail), if (condition
 `output` + `contains`), loop (ports repeat/exhausted, `max` iterations) and agent
 (replaced by the executable in $MOCK_AGENT, called with the node id and the loop
-iteration; its last stdout line is the verdict, a non-zero exit is port `failed`).
+iteration; its last stdout line is the verdict, a non-zero exit is port `failed`;
+an agent without verdicts leaves through `done`).
 
 Usage: run_workflow.py <workflow.yml>
 Prints "TRACE <node> <port>" per step and "END <node> <status>" at the end.
@@ -53,7 +54,9 @@ def main(path):
                                     capture_output=True, text=True)
             lines = result.stdout.strip().splitlines()
             port = "failed" if result.returncode != 0 or not lines else lines[-1]
-            assert port == "failed" or port in node.get("verdicts", []), port
+            if not node.get("verdicts") and port != "failed":
+                port = "done"  # an agent without verdicts leaves through "done"
+            assert port in ("failed", "done") or port in node.get("verdicts", []), port
         else:
             raise SystemExit(f"run_workflow: unsupported node type {kind}")
         print(f"TRACE {current} {port}")

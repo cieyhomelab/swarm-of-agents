@@ -1,0 +1,47 @@
+# Cezar workflow of one idea evaluation (spec S2/S3), started by bin/sw-start-ocena
+# as a NON-autonomous task in the sw-control project: the owner opens the push
+# notification in cezar-pwa and talks to the analyst. The agent only reads the
+# card and writes one comment (sw:ustalenia or sw:odrzucenie); it cannot change
+# labels: gh issue edit and every other state change are outside bashAllowlist.
+# The decision is read from the task history and applied by a later step
+# (sw-ocena-wynik), never taken from the agent's own words.
+#
+# A failed agent turn ends with status success on purpose (no failure
+# notification, see sw-sweep): the gate finds the unfinished evaluation and
+# starts a new task (URUCHOM: OCENA <nr>).
+
+version: 2
+name: sw-ocena
+description: Rozmowa analityka z właścicielem o pomyśle i karta decyzji Zatwierdź / Odrzuć.
+
+nodes:
+  - id: start
+    type: start
+
+  - id: analyst
+    type: agent
+    name: Analityk (ocena pomysłu)
+    skill: sw-analityk
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-analityk i pracuj w trybie ocena. Numer issue z kartą pomysłu jest w treści zadania.
+    allowedTools: [Read, Write, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh issue comment *"
+      - "mktemp"
+      - "mktemp *"
+
+  - id: done
+    type: end
+    status: success
+
+  - id: degraded
+    type: end
+    status: success
+
+edges:
+  - { from: start, to: analyst }
+  - { from: analyst.done, to: done }
+  - { from: analyst.failed, to: degraded }
