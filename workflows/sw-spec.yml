@@ -18,8 +18,10 @@
 # Every ending without a merge (remarks left after the last round, failed security
 # review, unmet merge conditions, a failed agent) ends the task with status success on
 # purpose: cezar-push alerts the owner for every failed task, and the spec allows no
-# such messages. Pausing the project after the last round of remarks (S11) comes with
-# the next implementation step.
+# such messages. The exception is the pause of the project (S4, S11): remarks left after
+# the last round and a failed security review of the PR go through bin/sw-spec-pr pause
+# (sw-spec-pause: label sw-stan-wstrzymany, pauseReason, idea closed, journal entry and
+# one "blocked" notification with the reason). The PR stays unmerged.
 #
 # Run as an autonomous task.
 
@@ -174,6 +176,18 @@ nodes:
     name: Powiadomienie „specyfikacja gotowa”
     command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" notify
 
+  - id: pause-rounds
+    type: check
+    name: Wstrzymanie projektu po uwagach z ostatniej rundy
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'recenzent: uwagi do specyfikacji po wyczerpaniu rund poprawek'
+
+  - id: pause-security
+    type: check
+    name: Wstrzymanie projektu po porażce przeglądu bezpieczeństwa
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa specyfikacji: fail'
+
   - id: done
     type: end
     name: Specyfikacja zmergowana
@@ -206,7 +220,7 @@ edges:
   - { from: review.uwagi, to: rounds }
   - { from: review.failed, to: stopped }
   - { from: rounds.repeat, to: fix }
-  - { from: rounds.exhausted, to: stopped }
+  - { from: rounds.exhausted, to: pause-rounds }
   - { from: fix.gotowa, to: commit-fix }
   - { from: fix.failed, to: stopped }
   - { from: commit-fix.done, to: push-fix }
@@ -216,11 +230,15 @@ edges:
   - { from: push-fix.failed, to: stopped }
 
   - { from: security.pass, to: pr-body }
-  - { from: security.fail, to: stopped }
+  - { from: security.fail, to: pause-security }
   - { from: security.failed, to: stopped }
   - { from: pr-body.pass, to: merge }
   - { from: pr-body.fail, to: stopped }
   - { from: merge.pass, to: notify }
   - { from: merge.fail, to: stopped }
+  - { from: pause-rounds.pass, to: stopped }
+  - { from: pause-rounds.fail, to: stopped }
+  - { from: pause-security.pass, to: stopped }
+  - { from: pause-security.fail, to: stopped }
   - { from: notify.pass, to: done }
   - { from: notify.fail, to: done }

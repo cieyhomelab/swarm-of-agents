@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# sw-spec-pause <powód> [--pr <url>] [--idea <control>#<nr>] — pauses the project of the
+# specification task (spec S4 last criterion, S11 for stage 1). On the idea issue of the
+# control repository ONE PATCH from a fresh read sets "sw-stan-wstrzymany" (every other
+# project-state label goes), writes "pauseReason" in the <!-- sw:meta {...} --> block and
+# closes the issue. Then it logs the pause in the journal and sends "sw-notify blocked"
+# with the reason: the owner gets no questions, the gate no longer counts the project as
+# active, so the next cycle starts the generator.
+#
+# The idea comes from --idea, otherwise from the README of the checkout in the working
+# directory (sw-create-repo seeds it with a link to the idea issue).
+# Output: WYNIK: WSTRZYMANY | WYNIK: POMINIETO <powód> (idea already paused, closed or
+# not a project); STAN: BLAD <powód> with exit 1 when GitHub fails or the idea is unknown.
+# A notification the gate refused does not undo the pause (the journal keeps the entry).
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[ $# -ge 1 ] || sw_die "uzycie: sw-spec-pause <powod> [--pr <url>] [--idea <control>#<nr>]"
+reason="$1"; shift
+pr_url="" idea=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pr) [ $# -ge 2 ] || sw_die "brak wartosci --pr"; pr_url="$2"; shift 2 ;;
+    --idea) [ $# -ge 2 ] || sw_die "brak wartosci --idea"; idea="$2"; shift 2 ;;
+    *) sw_die "nieznany argument: $1" ;;
+  esac
+done
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+if [ -z "$idea" ]; then
+  [ -r README.md ] || fail "brak README.md z linkiem do pomyslu"
+  link="$(grep -oE "https://github\.com/${control//./\\.}/issues/[0-9]+" README.md | head -1)" || true
+  idea="${link#https://github.com/}"; idea="${idea/\/issues\//#}"
+  [ -n "$link" ] || fail "README.md nie ma linku do pomyslu w $control"
+fi
+[[ "$idea" =~ ^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$ ]] || fail "niepoprawny pomysl: $idea"
+[ "${BASH_REMATCH[1]}" = "$control" ] || fail "pomysl $idea nie nalezy do $control"
+number="${BASH_REMATCH[2]}"
+issue_url="https://github.com/$control/issues/$number"
+
+reason="$(printf '%s' "$reason" | sw_scrub | tr '\n' ' ')"
+reason="${reason:0:300}"
+[ -z "$pr_url" ] || [[ "$pr_url" == https://github.com/* ]] || sw_die "adres PR musi zaczynac sie od https://github.com/"
+stored="$reason"; [ -z "$pr_url" ] || stored="$reason (PR $pr_url)"
+
+issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+if ! printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and (any(.labels[]?; .name == "sw-stan-wstrzymany") | not)' >/dev/null; then
+  echo "WYNIK: POMINIETO issue $number nie jest aktywnym pomyslem"
+  exit 0
+fi
+
+meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
+  | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+  || fail "niepoprawne metadane issue $number"
+meta="$(jq -c --arg r "$stored" '. + {pauseReason: $r}' <<<"$meta")"
+new_body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(printf '%s' "$issue" | jq -r '.body // ""')")" \
+  || fail "nie mozna zlozyc nowej tresci issue $number"
+labels="$(printf '%s' "$issue" | jq -c '[.labels[].name
+  | select(. != "sw-w-ocenie" and . != "sw-zatwierdzony" and (startswith("sw-stan-") | not))] + ["sw-stan-wstrzymany"] | unique')"
+jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l, state: "closed"}' \
+  | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna wstrzymac issue $number"
+
+"$here/sw-log" "wstrzymanie: pomysł #$number: $stored" >/dev/null || sw_log "nie mozna zapisac wstrzymania w dzienniku"
+"$here/sw-notify" blocked "$control" "$number" "Projekt wstrzymany: $reason" "$issue_url" >/dev/null \
+  || sw_log "powiadomienie o wstrzymaniu pomyslu #$number nie zostalo wyslane"
+
+echo "WYNIK: WSTRZYMANY"

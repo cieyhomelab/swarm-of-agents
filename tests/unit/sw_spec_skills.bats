@@ -112,9 +112,9 @@ edges = {(e["from"], e["to"]) for e in doc["edges"]}
 assert ("start", "sec-ustalenia") in edges
 assert ("sec-ustalenia.pass", "analyst") in edges and ("sec-ustalenia.fail", "stopped") in edges
 assert ("review.zatwierdzona", "security") in edges and ("review.uwagi", "rounds") in edges
-assert ("rounds.exhausted", "stopped") in edges
+assert ("rounds.exhausted", "pause-rounds") in edges and ("pause-rounds.pass", "stopped") in edges
 assert ("security.pass", "pr-body") in edges and ("pr-body.pass", "merge") in edges
-assert ("merge.pass", "notify") in edges and ("security.fail", "stopped") in edges
+assert ("merge.pass", "notify") in edges and ("security.fail", "pause-security") in edges and ("pause-security.pass", "stopped") in edges
 # the merge gets every verdict and run id from node outputs, never from comments
 cmd = nodes["merge"]["command"]
 for role, node in (("autor", "analyst"), ("recenzent", "review"), ("bezpieczenstwo", "security")):
