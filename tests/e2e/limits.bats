@@ -69,3 +69,52 @@ project() {
   [[ "$output" == "WYNIK: POMINIETO"* ]]
   [ "$(pushes | jq length)" -eq 1 ]
 }
+
+runs() {
+  curl -fsS -X POST "$MOCK_URL/__control" -d "$(jq -nc --argjson r "$1" '{runs: ($r | map(. + {project: "proj-app"}))}')" >/dev/null
+}
+app_runs() { state | jq -c '[.runs[] | select(.project == "proj-app")]'; }
+
+@test "S12 plan limit: 'sw-czeka-na-limit', no retry used, resumed without the owner after the renewal" {
+  project 2026-10-19T12:00:00Z '[]'
+  runs '[{"id":"a","status":"waiting","autoResumeAt":"2026-10-20T15:00:00Z","task":"t"},{"id":"b","status":"failed","task":"u"}]'
+  run "$bin/sw-gate"
+  [[ "$output" == *"URUCHOM: NIC"* ]]
+  [[ "$(idea | jq -c '[.labels[].name]')" == *sw-czeka-na-limit* ]]
+  [ "$(app_runs | jq length)" -eq 2 ]
+  runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T11:50:00Z","task":"t"}]'
+  "$bin/sw-gate" >/dev/null
+  [[ "$(idea | jq -c '[.labels[].name]')" != *sw-czeka-na-limit* ]]
+  [ "$(idea | jq -r .state)" = open ]
+}
+
+@test "S12 12 automatic resumes used up: a new task from the interrupted step" {
+  project 2026-10-19T12:00:00Z '[]'
+  runs '[{"id":"a","status":"failed","autoResumes":12,"step":"testy","task":"Zrob X"}]'
+  "$bin/sw-gate" >/dev/null
+  [ "$(app_runs | jq length)" -eq 2 ]
+  [[ "$(app_runs | jq -r '.[1].task')" == *"[wznowienie 0; od a]"*"testy" ]]
+}
+
+@test "S11 three hours without a commit or a state change: retried; retries used up: paused with a notification" {
+  project 2026-10-19T12:00:00Z '[]'
+  runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T08:00:00Z","task":"Zrob X"}]'
+  "$bin/sw-gate" >/dev/null
+  [[ "$(app_runs | jq -r '.[1].task')" == *"[ponowienie 1; zastępuje a]" ]]
+  runs '[{"id":"c","status":"failed","step":"testy","task":"Zrob X\n\n[ponowienie 2; zastępuje b]"}]'
+  run "$bin/sw-gate"
+  [[ "$output" == *"URUCHOM: GENERATOR"* ]]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
+  [[ "$(pushes | jq -r '.[0].body.title')" == *"ostatni stan: failed, krok testy"* ]]
+}
+
+@test "S12 a variable billed outside the plan: no task starts and the journal has an entry without the value" {
+  project 2026-10-19T12:00:00Z '[]'
+  runs '[{"id":"a","status":"failed","task":"Zrob X"}]'
+  run env ANTHROPIC_API_KEY=sk-x "$bin/sw-limits" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == "WYNIK: ZABLOKOWANY"*ANTHROPIC_API_KEY* ]]
+  [ "$(app_runs | jq length)" -eq 1 ]
+  [[ "$(state | jq -r '.comments["1"][0].body')" == *"zadanie nie wystartowało"*ANTHROPIC_API_KEY* ]]
+  [[ "$(state | jq -r '.comments["1"][0].body')" != *sk-x* ]]
+}

@@ -37,6 +37,8 @@ Routes:
   PUT  /github/repos/<o>/<r>/pulls/<n>/merge  405 while the PR is a draft, 409 unless body.sha equals the head sha
   GET  /github/repos/<o>/<r>/commits/<sha>/check-runs  {check_runs: [...]} from state "check_runs" ("<o>/<r>@<sha>" -> list
                                   of {name, status, conclusion}); empty for an unknown SHA
+  GET  /github/repos/<o>/<r>/commits?sha=<branch>&per_page=1  [{commit: {committer: {date}}}] from state "commits"
+                                  ("<o>/<r>@<branch>" -> ISO time of the last commit); empty for an unknown branch
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
@@ -68,6 +70,7 @@ DEFAULTS = {
     "contents": {},
     "pulls": {},
     "check_runs": {},
+    "commits": {},
     "repo_files": [],
     "runs": [],
     "repos": {},
@@ -138,6 +141,10 @@ class Handler(BaseHTTPRequestHandler):
         if checks:
             runs = STATE["check_runs"].get(f"{checks[1]}@{checks[2]}", [])
             return self._send(200, {"total_count": len(runs), "check_runs": runs})
+        commits = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/commits\?(.*)", self.path)
+        if commits:
+            when = STATE["commits"].get(f"{commits[1]}@{parse_qs(commits[2]).get('sha', [''])[0]}")
+            return self._send(200, [{"commit": {"committer": {"date": when}}}] if when else [])
         if self.path == "/__requests":
             return self._send(200, REQUESTS)
         if self.path == "/github/user":
@@ -257,6 +264,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": "state runs is not a list"})
             run = {"id": f"run-{len(STATE['runs']) + 1}", "project": started[1], "task": body["task"],
                    "workflow": body.get("workflow", ""), "autonomous": body["autonomous"], "status": "waiting"}
+            if body.get("model"):
+                run["model"] = body["model"]
             STATE["runs"].append(run)
             return self._send(201, {"id": run["id"]})
         created = re.fullmatch(r"/cez/p/([^/]+)/automations", self.path)

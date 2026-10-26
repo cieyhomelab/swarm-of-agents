@@ -116,3 +116,82 @@ paused() {
   [[ "$output" == *"URUCHOM: NIC"* ]]
   [ "$(state | jq -r '.issues[] | select(.number == 5) | .state')" = open ]
 }
+
+# runs <json> — the tasks of the Cezar project "proj-app".
+runs() {
+  curl -fsS -X POST "$MOCK/__control" -d "$(jq -nc --argjson r "$1" '{runs: ($r | map(. + {project: "proj-app"}))}')" >/dev/null
+}
+labels() { state | jq -c '[.issues[] | select(.number == 5) | .labels[].name]'; }
+app_runs() { state | jq -c '[.runs[] | select(.project == "proj-app")]'; }
+journal_text() { state | jq -r '[.comments["1"][]?.body] | join("\n")'; }
+
+@test "S12 plan limit: label, retries unchanged, no new task; the label goes when the limit renews" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"waiting","autoResumeAt":"2026-10-20T15:00:00Z","updatedAt":"2026-10-20T08:00:00Z","task":"t\n\n[ponowienie 1; zastępuje z]"},
+         {"id":"b","status":"failed","task":"u"}]'
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: CZEKA-NA-LIMIT" ]
+  [[ "$(labels)" == *sw-czeka-na-limit* ]]
+  [ "$(app_runs | jq length)" -eq 2 ]
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: CZEKA-NA-LIMIT" ]
+  [ "$(labels | jq '[.[] | select(. == "sw-czeka-na-limit")] | length')" -eq 1 ]
+  runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T11:30:00Z","task":"t\n\n[ponowienie 1; zastępuje z]"}]'
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: OK" ]
+  [[ "$(labels)" != *sw-czeka-na-limit* ]]
+  [ "$(app_runs | jq length)" -eq 1 ]
+}
+
+@test "S12 12 exhausted automatic resumes: a new task from the interrupted step, once, retries not used" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"failed","autoResumes":12,"step":"testy","workflow":"sw-build","task":"Zrob X\n\n[ponowienie 1; zastępuje z]"}]'
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: OK" ]
+  [ "$(app_runs | jq length)" -eq 2 ]
+  [[ "$(app_runs | jq -r '.[1].task')" == *"[wznowienie 1; od a]"*"testy" ]]
+  [ "$(app_runs | jq -r '.[1].workflow')" = sw-build ]
+  [[ "$(journal_text)" == *"wznowienie: pomysł #5"* ]]
+  run "$ROOT/bin/sw-limits" 5
+  [ "$(app_runs | jq length)" -eq 2 ]
+}
+
+@test "S11 a task without a commit and a state change for 3 hours is retried without the owner" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T08:30:00Z","branch":"feat/x","task":"Zrob X"}]'
+  curl -fsS -X POST "$MOCK/__control" -d '{"commits": {"cieyhomelab/app@feat/x": "2026-10-20T08:45:00Z"}}' >/dev/null
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: OK" ]
+  [[ "$(app_runs | jq -r '.[1].task')" == *"[ponowienie 1; zastępuje a]" ]]
+  [[ "$(journal_text)" == *"ponowienie: pomysł #5"*"brak commitu"* ]]
+}
+
+@test "S11 a commit within 3 hours is progress: nothing is retried" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T01:00:00Z","branch":"feat/x","task":"Zrob X"}]'
+  curl -fsS -X POST "$MOCK/__control" -d '{"commits": {"cieyhomelab/app@feat/x": "2026-10-20T10:00:00Z"}}' >/dev/null
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: OK" ]
+  [ "$(app_runs | jq length)" -eq 1 ]
+}
+
+@test "S11 retries used up: the project is paused with the cause and the last state in the notification" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"c","status":"failed","step":"testy","task":"Zrob X\n\n[ponowienie 2; zastępuje b]"}]'
+  run "$ROOT/bin/sw-limits" 5
+  [[ "$output" == "WYNIK: WSTRZYMANY wyczerpane ponowienia (2/2)"* ]]
+  paused
+  [ "$(pushes | jq length)" -eq 1 ]
+  [[ "$(pushes | jq -r '.[0].body.title')" == *"ostatni stan: failed, krok testy"* ]]
+}
+
+@test "S12 a variable billed outside the plan: no task starts, the journal has an entry" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"failed","task":"Zrob X"}]'
+  run env ANTHROPIC_API_KEY=sk-x "$ROOT/bin/sw-limits" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == "WYNIK: ZABLOKOWANY"*ANTHROPIC_API_KEY* ]]
+  [ "$(app_runs | jq length)" -eq 1 ]
+  [[ "$(journal_text)" == *"zadanie nie wystartowało"*ANTHROPIC_API_KEY* ]]
+  [[ "$(journal_text)" != *sk-x* ]]
+}
