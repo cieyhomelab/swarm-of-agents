@@ -25,7 +25,10 @@
 #    After the merge bin/sw-moduly opens the issue "Moduł: <modul>" (sw-modul, sw-modul-do-zrobienia)
 #    for every contract (spec S5, many modules).
 # 5. Module (spec S6, S7; stage 2 has ONE module, so no dispatch): the project goes to
-#    sw-stan-implementacja (bin/sw-stan), sw-inzynier implements the module and writes a test
+#    sw-stan-implementacja (bin/sw-stan), bin/sw-kierownik przydziel moves the modules to
+#    sw-modul-w-pracy at most as many as maxParallelAgents leaves free (it also sets the limit as
+#    maxParallel of the project; the module is back to sw-modul-zmergowany at kierownik-merged
+#    after the merge of its PR), sw-inzynier implements the module and writes a test
 #    for every "udostępnia" item and an E2E test for every scenario; commit, push and a draft
 #    PR follow. bin/sw-pokrycie-check modul verifies the "## Pokrycie" of the contract (a test
 #    file for every item); remarks start a fix round of the engineer (rounds-mod). Then the
@@ -263,6 +266,11 @@ nodes:
     name: Stan projektu - implementacja
     command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-stan" architektura implementacja
 
+  - id: kierownik
+    type: check
+    name: Przydział modułów do limitu agentów (sw-kierownik)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-kierownik" przydziel
+
   - id: limits-engineer
     type: check
     name: Limity projektu (przed inżynierem)
@@ -433,6 +441,16 @@ nodes:
         --werdykt "autor={{nodes.engineer.verdict}}@{{nodes.engineer.runId}}" \
         --werdykt "recenzent={{nodes.review-mod.verdict}}@{{nodes.review-mod.runId}}" \
         --werdykt "bezpieczenstwo={{nodes.security-mod.verdict}}@{{nodes.security-mod.runId}}"
+
+  - id: kierownik-merged
+    type: check
+    name: Moduł zmergowany (sw-kierownik)
+    command: |
+      for f in docs/kontrakty/*.md; do
+        m="$(basename "$f" .md)"
+        [ "${m,,}" = readme ] && continue
+        bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-kierownik" zmergowany "$m" || exit 1
+      done
 
   - id: state-integ
     type: check
@@ -746,7 +764,9 @@ edges:
   - { from: pause-security.pass, to: stopped }
   - { from: pause-security.fail, to: stopped }
 
-  - { from: state-impl.pass, to: limits-engineer }
+  - { from: state-impl.pass, to: kierownik }
+  - { from: kierownik.pass, to: limits-engineer }
+  - { from: kierownik.fail, to: stopped }
   - { from: state-impl.fail, to: stopped }
   - { from: limits-engineer.pass, to: engineer }
   - { from: limits-engineer.fail, to: stopped }
@@ -795,7 +815,9 @@ edges:
   - { from: limits-merge-mod.fail, to: stopped }
   - { from: merge-mod.pass, to: report-merged }
   - { from: report-merged.pass, to: state-deploy }
-  - { from: report-merged.fail, to: state-integ }
+  - { from: report-merged.fail, to: kierownik-merged }
+  - { from: kierownik-merged.pass, to: state-integ }
+  - { from: kierownik-merged.fail, to: stopped }
   - { from: merge-mod.fail, to: stopped }
 
   - { from: state-integ.pass, to: limits-test }

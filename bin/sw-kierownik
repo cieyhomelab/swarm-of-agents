@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# sw-kierownik przydziel | zmergowany <modul> | stan — the manager of the modules (spec S6): the
+# state of a module is the label of its issue "Moduł: <modul>" in the application repository
+# (sw-modul-do-zrobienia -> sw-modul-w-pracy -> sw-modul-zmergowany; sw-moduly zaloz opens them).
+#   przydziel   reads the limit "maxParallelAgents" from the configuration on EVERY call (a changed
+#               limit holds from the next assignment), sets it as "maxParallel" of the Cezar project
+#               ($CEZ_PROJECT_ID; skipped without it), counts the modules in work and moves to
+#               "w-pracy" at most as many modules "do-zrobienia" as the limit leaves free, lowest
+#               issue number first. A module is ready when every "- <modul>: <pozycja>" of its
+#               "## Wymaga" has a contract, i.e. an issue of that module (the implementation rests
+#               on the contract, not on the finished module). Every move re-reads the issue.
+#   zmergowany  moves a module "w-pracy" to "zmergowany" and closes its issue (after sw-merge kod).
+#   stan        prints the counts of the three states.
+# Repository: origin of the checkout; SW_SPEC_REPO overrides it (tests).
+#
+# Output: URUCHOM: <modul> per assigned module, WYNIK: PRZYDZIELONO <n> (w pracy <m> z limitu <l>,
+# gotowych bez miejsca <k>, czeka na kontrakt <j>) | WYNIK: ZMERGOWANY <modul> | WYNIK: POMINIETO
+# <powód> | WYNIK: STAN do-zrobienia <a> w-pracy <b> zmergowany <c>; STAN: BLAD <powód> with exit 1.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+cmd="${1:-}"
+case "$cmd" in
+  przydziel | stan) [ $# -eq 1 ] || sw_die "uzycie: sw-kierownik przydziel | zmergowany <modul> | stan" ;;
+  zmergowany) [ $# -eq 2 ] || sw_die "uzycie: sw-kierownik zmergowany <modul>" ;;
+  *) sw_die "uzycie: sw-kierownik przydziel | zmergowany <modul> | stan" ;;
+esac
+
+repo="${SW_SPEC_REPO:-}"
+if [ -z "$repo" ]; then
+  sw_require git
+  url="$(git remote get-url origin 2>/dev/null)" || fail "brak zdalnego repozytorium origin"
+  repo="$(printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
+fi
+[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "niepoprawne repozytorium: $repo"
+
+# modules — the module issues as one JSON array [{numer, modul, state, open, body}], oldest first.
+modules() {
+  gh api --paginate "repos/$repo/issues?labels=sw-modul&state=all&per_page=100" 2>/dev/null \
+    | jq -sc '[.[] | (if type == "array" then .[] else . end)
+               | select(.pull_request == null and ((.title // "") | startswith("Moduł: ")))
+               | {numer: .number, modul: (.title | sub("^Moduł: "; "")), open: ((.state // "open") == "open"),
+                  body: (.body // ""),
+                  stan: ([.labels[]?.name | select(startswith("sw-modul-")) | sub("^sw-modul-"; "")] | first // "")}]
+              | sort_by(.numer)'
+}
+
+# move <numer> <z> <do> [close] — one PATCH from a fresh read: replaces "sw-modul-<z>" with
+# "sw-modul-<do>"; status 2 when the issue is no longer in <z> (somebody else was faster).
+move() {
+  local number="$1" from="$2" to="$3" close="${4:-}" issue labels
+  issue="$(gh api "repos/$repo/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $repo#$number"
+  printf '%s' "$issue" | jq -e --arg f "sw-modul-$from" 'any(.labels[]?; .name == $f)' >/dev/null || return 2
+  labels="$(printf '%s' "$issue" | jq -c --arg f "sw-modul-$from" --arg t "sw-modul-$to" \
+    '[.labels[].name | select(. != $f)] + [$t] | unique')"
+  jq -nc --argjson l "$labels" --arg c "$close" '{labels: $l} + (if $c == "close" then {state: "closed"} else {} end)' \
+    | gh api -X PATCH "repos/$repo/issues/$number" --input - >/dev/null 2>&1 \
+    || fail "nie mozna przestawic issue $repo#$number na stan $to"
+}
+
+mods="$(modules)" || fail "nie mozna odczytac issues modulow $repo"
+[ "$(jq 'length' <<<"$mods")" -gt 0 ] || fail "brak issues modulow w $repo"
+
+count() { jq --arg s "$1" '[.[] | select(.stan == $s and .open)] | length' <<<"$mods"; }
+
+case "$cmd" in
+  stan)
+    echo "WYNIK: STAN do-zrobienia $(count do-zrobienia) w-pracy $(count w-pracy) zmergowany $(jq '[.[] | select(.stan == "zmergowany")] | length' <<<"$mods")"
+    ;;
+
+  zmergowany)
+    module="$2"
+    item="$(jq -c --arg m "$module" 'map(select(.modul == $m)) | first // empty' <<<"$mods")"
+    [ -n "$item" ] || fail "brak issue modulu $module"
+    number="$(jq -r .numer <<<"$item")"
+    move "$number" w-pracy zmergowany close
+    case $? in
+      0) sw_log "sw-kierownik: modul $module zmergowany"; echo "WYNIK: ZMERGOWANY $module" ;;
+      *) echo "WYNIK: POMINIETO modul $module nie jest w pracy" ;;
+    esac
+    ;;
+
+  przydziel)
+    limit="$(jq -er '.maxParallelAgents // 3 | select(type == "number" and . >= 1 and . == floor)' "$SW_CONFIG")" \
+      || fail "niepoprawny maxParallelAgents w konfiguracji"
+    if [ -n "${CEZ_PROJECT_ID:-}" ]; then
+      sw_require curl
+      code="$(jq -nc --argjson n "$limit" '{maxParallel: $n}' | curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+        -X PATCH -H 'Content-Type: application/json' --data-binary @- "$SW_CEZAR_URL/api/v1/projects/$CEZ_PROJECT_ID" 2>/dev/null)"
+      [[ "$code" =~ ^2 ]] || fail "nie mozna ustawic maxParallel projektu $CEZ_PROJECT_ID (HTTP $code)"
+    else
+      sw_log "sw-kierownik: brak CEZ_PROJECT_ID, maxParallel projektu bez zmian"
+    fi
+    working="$(count w-pracy)"
+    # ready: a module requiring a module that has no issue (no contract) waits; waiting for a free slot
+    # is something else and is counted apart.
+    names="$(jq -r '.[].modul' <<<"$mods")"
+    ready="" waiting=0
+    while IFS= read -r item; do
+      [ -n "$item" ] || continue
+      ok=1
+      while IFS= read -r need; do
+        [ -n "$need" ] || continue
+        printf '%s\n' "$names" | grep -qxF -- "$need" || ok=0
+      done < <(jq -r .body <<<"$item" | awk '/^## Wymaga/ {f=1; next} /^## / {f=0} f && /^- / {sub(/^- /, ""); sub(/:.*/, ""); gsub(/^ +| +$/, ""); print}')
+      if [ "$ok" -eq 1 ]; then ready="${ready}${item}"$'\n'; else waiting=$((waiting + 1)); fi
+    done < <(jq -c '.[] | select(.stan == "do-zrobienia" and .open)' <<<"$mods")
+    free=$((limit - working)); [ "$free" -ge 0 ] || free=0
+    assigned=0
+    while IFS= read -r item; do
+      [ -n "$item" ] || continue
+      [ "$assigned" -lt "$free" ] || break
+      move "$(jq -r .numer <<<"$item")" do-zrobienia w-pracy
+      case $? in
+        0) assigned=$((assigned + 1)); echo "URUCHOM: $(jq -r .modul <<<"$item")" ;;
+        *) ;;
+      esac
+    done <<<"$ready"
+    unassigned=$(( $(printf '%s' "$ready" | grep -c .) - assigned ))
+    sw_log "sw-kierownik: przydzielono $assigned (w pracy $((working + assigned)) z limitu $limit)"
+    echo "WYNIK: PRZYDZIELONO $assigned (w pracy $((working + assigned)) z limitu $limit, gotowych bez miejsca $unassigned, czeka na kontrakt $waiting)"
+    ;;
+esac

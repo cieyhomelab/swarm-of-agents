@@ -21,6 +21,7 @@ setup() {
   printf '# Planer\n\nPomysł i jego ocena: https://github.com/cieyhomelab/sw-control/issues/7\n' > README.md
   printf '# Planer\n\n### S1: Menu\n- Zakładając tydzień, wtedy lista zakupów.\n\n### S2: Lista\n- Zakładając menu, wtedy lista.\n\n## Założenia\n- Język polski.\n' > .ai/specs/spec.md
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
+    "projects": [{"id": "proj", "name": "app"}],
     "issues": [{"number": 1, "state": "open", "title": "sw-dziennik", "labels": [{"name": "sw-dziennik"}]},
                {"number": 7, "state": "open", "title": "Planer posiłków", "labels": [{"name": "sw-pomysl"}, {"name": "sw-stan-architektura"}],
                 "body": "## Problem i dla kogo\nx\n\n<!-- sw:meta {\"repo\":\"cieyhomelab/app\",\"projectId\":\"proj\"} -->"}],
@@ -161,9 +162,10 @@ app_issues() { state | jq -c '.app_issues["cieyhomelab/app"] // []'; }
   build
   [ "$status" -eq 0 ]
   # the stage 2 mock engineer implements one module, so only the architecture phase is asserted
-  [[ "$output" == *"TRACE arch-check pass"* && "$output" == *"TRACE merge pass"* && "$output" == *"TRACE moduly pass"* ]]
   [ "$(app_issues | jq -c 'map(.title) | sort')" = '["Moduł: planer","Moduł: zakupy"]' ]
-  [ "$(app_issues | jq -c 'map([.labels[].name] | sort) | unique')" = '[["sw-modul","sw-modul-do-zrobienia"]]' ]
+  # S6 the manager assigned both modules (limit 3); the stage 2 mock engineer builds only one, so none is merged
+  [ "$(app_issues | jq -c 'map([.labels[].name | select(startswith("sw-modul-"))]) | unique')" = '[["sw-modul-w-pracy"]]' ]
+  [[ "$output" == *"TRACE arch-check pass"* && "$output" == *"TRACE merge pass"* && "$output" == *"TRACE moduly pass"* && "$output" == *"TRACE kierownik pass"* ]]
 }
 
 @test "S5 many modules: a scenario assigned to no module starts a fix round, contract tests are required" {
@@ -549,4 +551,23 @@ print(next(n for n in doc["nodes"] if n["id"] == "handover")["command"])' "$home
   [ "${lines[-1]}" = "WYNIK: BUDOWA run-1" ]
   [ "$(state | jq -r '.runs[0].workflow')" = sw-build ]
   [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-architektura"]' ]
+}
+
+@test "S6 the manager assigns the module of a single-module build and marks it merged after its PR" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE kierownik pass"* && "$output" == *"TRACE kierownik-merged pass"* ]]
+  [ "$(app_issues | jq -c 'map([.title, .state, ([.labels[].name | select(startswith("sw-modul-"))] | join(","))])')" \
+    = '[["Moduł: planer","closed","sw-modul-zmergowany"]]' ]
+  [ "$(state | jq '.projects[0].maxParallel')" = 3 ]
+}
+
+@test "S6 a failing assignment (project unknown to Cezar) ends the build before the engineer" {
+  curl -fsS -X POST "$MOCK_URL/__control" -d '{"projects": []}' >/dev/null
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE kierownik fail"* && "$output" == *"END stopped"* ]]
+  [ "$(called engineer)" -eq 0 ]
 }

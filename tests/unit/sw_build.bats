@@ -155,7 +155,12 @@ assert nodes["tester"]["model"] == models["reviewer"] and nodes["tester"]["skill
 assert nodes["review-mod"]["model"] == models["reviewer"] != nodes["engineer"]["model"]
 assert nodes["security-mod"]["model"] == models["security"]
 # the architecture merge leads to the module, the module PR to the tests, only a pass to the review state
-assert ("merge.pass", "moduly") in edges and ("moduly.pass", "state-impl") in edges and ("moduly.fail", "stopped") in edges and ("report-merged.fail", "state-integ") in edges and ("merge-mod.pass", "report-merged") in edges
+assert ("merge.pass", "moduly") in edges and ("moduly.pass", "state-impl") in edges and ("moduly.fail", "stopped") in edges and ("report-merged.fail", "kierownik-merged") in edges and ("merge-mod.pass", "report-merged") in edges
+# S6 the manager assigns the modules before the engineer and marks the merged module before the integration
+assert ("state-impl.pass", "kierownik") in edges and ("kierownik.pass", "limits-engineer") in edges and ("kierownik.fail", "stopped") in edges
+assert "bin/sw-kierownik" in nodes["kierownik"]["command"] and "przydziel" in nodes["kierownik"]["command"]
+assert ("kierownik-merged.pass", "state-integ") in edges and ("kierownik-merged.fail", "stopped") in edges
+assert "sw-kierownik" in nodes["kierownik-merged"]["command"] and "zmergowany" in nodes["kierownik-merged"]["command"]
 assert ("tester.pass", "state-review") in edges and ("state-review.pass", "limits-app") in edges
 assert ("e2e-check.pass", "e2e-run") in edges and ("e2e-run.pass", "limits-tester") in edges
 for failing in ("e2e-check.fail", "e2e-run.fail", "tester.fail"):
@@ -444,4 +449,15 @@ multi_arch() {
     grep -qF -- "$s" "$f" || { echo "missing: $s"; return 1; }
   done
   [ "$(jq -r '.multiModule' "$ROOT/config/sw.json")" = false ]
+}
+
+@test "S6 the sw-kierownik skill runs the script, dispatches only what it lists and names the model chores" {
+  f="$ROOT/skills/sw-kierownik/SKILL.md"
+  [ "$(sed -n 's/^name:[[:space:]]*//p' "$f" | head -1)" = sw-kierownik ]
+  grep -q 'chores' "$f"
+  grep -q 'sw-kierownik" przydziel' "$f"
+  grep -q 'URUCHOM' "$f"
+  grep -q 'maxParallelAgents' "$f"
+  grep -q 'zmergowany' "$f"
+  [ "$(jq -r .models.chores "$ROOT/config/sw.json")" = haiku ]
 }
