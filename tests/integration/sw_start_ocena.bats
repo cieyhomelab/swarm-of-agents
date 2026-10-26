@@ -81,3 +81,26 @@ card() {
   [[ "$output" == "STAN: BLAD "* ]]
   [ "$(state | jq '.runs | length')" -eq 0 ]
 }
+
+@test "a live task left by a failed evalRunId write is reused, not duplicated" {
+  control "{\"issues\": [$(card 3 '["sw-pomysl","sw-w-ocenie"]')],
+    \"runs\": [{\"id\": \"orphan-1\", \"project\": \"proj-sw-control\", \"task\": \"Ocena pomysłu: cieyhomelab/sw-control#3\",
+                \"workflow\": \"sw-ocena\", \"autonomous\": false, \"status\": \"waiting\"}]}"
+  run "$ROOT/bin/sw-start-ocena" 3
+  [ "$status" -eq 0 ]
+  [ "$output" = "WYNIK: ZADANIE orphan-1" ]
+  s="$(state)"
+  [ "$(jq '.runs | length' <<<"$s")" -eq 1 ]
+  [[ "$(jq -r '.issues[0].body' <<<"$s")" == *'"evalRunId":"orphan-1"'* ]]
+}
+
+@test "a finished task or one of another idea does not block a new task" {
+  control "{\"issues\": [$(card 3 '["sw-pomysl","sw-w-ocenie"]')],
+    \"runs\": [{\"id\": \"old\", \"project\": \"proj-sw-control\", \"task\": \"Ocena pomysłu: cieyhomelab/sw-control#3\",
+                \"workflow\": \"sw-ocena\", \"autonomous\": false, \"status\": \"failed\"},
+               {\"id\": \"other\", \"project\": \"proj-sw-control\", \"task\": \"Ocena pomysłu: cieyhomelab/sw-control#4\",
+                \"workflow\": \"sw-ocena\", \"autonomous\": false, \"status\": \"waiting\"}]}"
+  run "$ROOT/bin/sw-start-ocena" 3
+  [ "$status" -eq 0 ]
+  [ "$output" = "WYNIK: ZADANIE run-3" ]
+}
