@@ -12,7 +12,7 @@ setup() {
   export FAKE_GH_API_URL="$MOCK" SW_PUSH_URL="$MOCK" SW_CEZAR_URL="$MOCK"
   export SW_PUSH_TOKEN_FILE="$WORK/token"; echo test-token > "$SW_PUSH_TOKEN_FILE"
   export PATH="$ROOT/tests/fakes:$PATH"
-  export SW_NOW=2026-10-20T12:00:00Z
+  export SW_NOW=2026-10-20T12:00:00Z SW_STATE_DIR="$WORK/state"
 }
 
 teardown() { kill "$MOCK_PID" 2>/dev/null || true; rm -rf "$WORK"; }
@@ -206,6 +206,14 @@ journal_text() { state | jq -r '[.comments["1"][]?.body] | join("\n")'; }
   [[ "$output" == "STAN: BLAD nie mozna zatrzymac zadania a"* ]]
   [ "$(app_runs | jq length)" -eq 1 ]
   [ "$(app_runs | jq -r '.[0].status')" = running ]
+}
+
+@test "a task cancelled by hand is not retried and does not pause the project (#56)" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"cancelled","task":"Zrob X"},{"id":"b","status":"cancelled","task":"Zrob X\n\n[ponowienie 2; zastępuje z]"}]'
+  run "$ROOT/bin/sw-limits" 5
+  [ "$output" = "WYNIK: OK" ]
+  [ "$(app_runs | jq length)" -eq 2 ]
 }
 
 @test "S11 a stalled task cancelled when the new task could not be created is retried in the next cycle (#51)" {

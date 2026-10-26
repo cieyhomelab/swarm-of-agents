@@ -5,8 +5,8 @@ setup() { LIB="$BATS_TEST_DIRNAME/../../bin/lib/sw_runs.py"; }
 
 # plan <runs-json> [progress-json] — the decision at 2026-10-20T12:00:00Z with the default limits.
 plan() {
-  jq -nc --argjson r "$1" --argjson p "${2:-{\}}" \
-    '{runs: $r, now: "2026-10-20T12:00:00Z", stalledAfterHours: 3, retriesPerTask: 2, autoResumeLimit: 12, progress: $p}' \
+  jq -nc --argjson r "$1" --argjson p "${2:-{\}}" --arg s "${STOPPED:-[]}" \
+    '{runs: $r, now: "2026-10-20T12:00:00Z", stalledAfterHours: 3, retriesPerTask: 2, autoResumeLimit: 12, progress: $p, stoppedByLimits: ($s | fromjson)}' \
     | python3 "$LIB"
 }
 
@@ -63,7 +63,15 @@ plan() {
   [ "$(jq '.actions | length' <<<"$output")" -eq 0 ]
 }
 
-@test "a cancelled task without a successor is retried (no stop); a replaced one is left alone" {
+@test "a task cancelled by hand is left alone, even as the last retry (#56)" {
+  run plan '[{"id":"a","status":"cancelled","task":"Zrob X"}]'
+  [ "$(jq '.actions | length' <<<"$output")" -eq 0 ]
+  run plan '[{"id":"a","status":"cancelled","task":"Zrob X\n\n[ponowienie 2; zastępuje z]"}]'
+  [ "$(jq '.actions | length' <<<"$output")" -eq 0 ]
+}
+
+@test "a cancelled task recorded as stopped by sw-limits and without a successor is retried (no stop); a replaced one is left alone" {
+  STOPPED='["a"]'
   run plan '[{"id":"a","status":"cancelled","task":"Zrob X"}]'
   [ "$(jq -r '.actions[0].kind' <<<"$output")" = retry ]
   [ "$(jq -r '.actions[0].stop' <<<"$output")" = false ]
