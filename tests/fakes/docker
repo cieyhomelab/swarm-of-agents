@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Fake Docker CLI for the tests of bin/sw-deploy. State lives in $FAKE_DOCKER_DIR (one file per
+# container, "calls" logs every command). Supports build, network create|rm|connect, run, create,
+# start, port and rm -f. A started proxy (the container created with -p <bind>:<port>:8080) is a
+# real listener (tests/tools/fake_deploy_proxy.py) serving $FAKE_DOCKER_LOGIN ("user:password").
+# $FAKE_DOCKER_MODE: ok (default) | open | dead (see the proxy) | build-fail | published (the
+# application container publishes a port).
+set -uo pipefail
+: "${FAKE_DOCKER_DIR:?fake docker: FAKE_DOCKER_DIR not set}"
+mkdir -p "$FAKE_DOCKER_DIR"
+echo "$*" >> "$FAKE_DOCKER_DIR/calls"
+mode="${FAKE_DOCKER_MODE:-ok}"
+tools="$(cd "$(dirname "$0")/../tools" && pwd)"
+
+cmd="$1"; shift
+case "$cmd" in
+  build)
+    [ "$mode" != build-fail ] ;;
+  network)
+    sub="$1"; shift
+    case "$sub" in
+      create) echo "${*: -1}" >> "$FAKE_DOCKER_DIR/networks" ;;
+      connect) echo "$1 $2" >> "$FAKE_DOCKER_DIR/connected" ;;
+      rm) echo "$*" >> "$FAKE_DOCKER_DIR/networks-removed" ;;
+    esac ;;
+  run | create)
+    name="" publish=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -d) shift ;;
+        --restart | --memory | --network | --network-alias | --pids-limit | --security-opt | -v) shift 2 ;;
+        --name) name="$2"; shift 2 ;;
+        -p) publish="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    echo "$publish" > "$FAKE_DOCKER_DIR/c-$name"
+    ;;
+  start)
+    name="$1"
+    publish="$(cat "$FAKE_DOCKER_DIR/c-$name")"
+    IFS=: read -r bind port _ <<<"$publish"
+    nohup python3 "$tools/fake_deploy_proxy.py" "$bind" "$port" "$mode" "$FAKE_DOCKER_LOGIN" >/dev/null 2>&1 &
+    echo $! > "$FAKE_DOCKER_DIR/pid-$name"
+    for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/$bind/$port") 2>/dev/null && break; sleep 0.1; done ;;
+  port)
+    [ "$mode" != published ] || echo "8080/tcp -> 0.0.0.0:49153" ;;
+  rm)
+    shift  # -f
+    for name in "$@"; do
+      [ ! -s "$FAKE_DOCKER_DIR/pid-$name" ] || kill "$(cat "$FAKE_DOCKER_DIR/pid-$name")" 2>/dev/null
+      rm -f "$FAKE_DOCKER_DIR/pid-$name" "$FAKE_DOCKER_DIR/c-$name"
+    done ;;
+  *) echo "fake docker: unsupported command: $cmd" >&2; exit 2 ;;
+esac

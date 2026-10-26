@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # sw-notify <rodzaj> <repo> <nr> <tytul> <url> — push notification for the owner
-# through the cezar-push gate (POST /m/push/gate). rodzaj: spec | blocked.
+# through the cezar-push gate (POST /m/push/gate). rodzaj: spec | blocked | deployed.
+# "deployed" (S10) goes through the gate as "spec" until cezar-pwa has its own kind;
+# the private address of the application is in the title (the url stays a GitHub link).
 # Only gate, repo, number, title (<= 100 chars) and url are sent; the token goes
 # in the X-Cezar-Push-Token header, never in the body, the logs or the arguments.
 # Prints "WYNIK: WYSLANO" (exit 0), or "WYNIK: POMINIETO" when there is no token
@@ -14,7 +16,7 @@ sw_require curl jq
 [ $# -eq 5 ] || sw_die "uzycie: sw-notify <rodzaj> <repo> <nr> <tytul> <url>"
 kind="$1" repo="$2" number="$3" title="$4" url="$5"
 
-case "$kind" in spec | blocked) ;; *) sw_die "nieznany rodzaj powiadomienia: $kind" ;; esac
+case "$kind" in spec | blocked) gate="$kind" ;; deployed) gate=spec ;; *) sw_die "nieznany rodzaj powiadomienia: $kind" ;; esac # TODO(cezar-pwa): gate "deployed"
 [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || sw_die "niepoprawne repozytorium: $repo"
 [[ "$number" =~ ^[0-9]+$ ]] || sw_die "niepoprawny numer: $number"
 [[ "$url" == https://github.com/* ]] || sw_die "adres musi zaczynac sie od https://github.com/"
@@ -30,7 +32,7 @@ token="$(tr -d '\r\n' < "$token_file")"
 
 title="$(printf '%s' "$title" | sw_scrub | tr '\n' ' ')"
 title="${title:0:100}"
-body="$(jq -nc --arg gate "$kind" --arg repo "$repo" --argjson number "$number" \
+body="$(jq -nc --arg gate "$gate" --arg repo "$repo" --argjson number "$number" \
   --arg title "$title" --arg url "$url" '{gate: $gate, repo: $repo, number: $number, title: $title, url: $url}')"
 
 code="$(printf '%s' "$body" | curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \

@@ -88,13 +88,22 @@ journal() {
   [ "$(pushes | jq length)" -eq 1 ]
 }
 
+@test "sw-notify deployed (S10) goes through the gate as spec with the address in the title" {
+  run "$ROOT/bin/sw-notify" deployed cieyhomelab/sw-control 7 "Wdrożono: http://127.0.0.1:18100 (planer)" https://github.com/cieyhomelab/sw-control/issues/7
+  [ "$status" -eq 0 ]
+  [ "$output" = "WYNIK: WYSLANO" ]
+  req="$(pushes | jq -c '.[0].body')"
+  [ "$(jq -r .gate <<<"$req")" = spec ]
+  [ "$(jq -r .title <<<"$req")" = "Wdrożono: http://127.0.0.1:18100 (planer)" ]
+}
+
 @test "sw-notify reports a refused notification and rejects bad arguments" {
   control '{"push_token": "other"}'
   run "$ROOT/bin/sw-notify" blocked cieyhomelab/app 4 t https://github.com/cieyhomelab/app/pull/4
   [ "$status" -eq 1 ]
   [ "${lines[-1]}" = "WYNIK: POMINIETO" ]
   [[ "$output" != *"test-token"* ]]
-  run "$ROOT/bin/sw-notify" deployed cieyhomelab/app 4 t https://github.com/cieyhomelab/app/pull/4
+  run "$ROOT/bin/sw-notify" nieznany cieyhomelab/app 4 t https://github.com/cieyhomelab/app/pull/4
   [ "$status" -ne 0 ]
   run "$ROOT/bin/sw-notify" blocked cieyhomelab/app 4 t http://evil.example/x
   [ "$status" -ne 0 ]

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# sw-wdrozony — finishes the deployment of the build task (spec S10): the project goes from
+# "sw-stan-wdrazanie" to "sw-stan-wdrozony" and the owner gets a notification with the title and
+# the private address. The address comes from .ai/sw-run/wdrozenie.json (written by sw-deploy).
+# ONE PATCH from a fresh read swaps the label, stores "deployUrl" in the <!-- sw:meta {...} -->
+# block and closes the idea issue, so the gate no longer counts the project as active and the next
+# cycle starts the generator. Then it logs the deployment (without the address) and notifies:
+# "sw-notify deployed" (the title carries the address; a stand-in for the cezar-pwa kind).
+# The idea comes from the README of the checkout in the working directory.
+#
+# Output: WYNIK: WDROZONY <adres> | WYNIK: POMINIETO <powód> (exit 0: the idea is not in
+# "wdrazanie", e.g. after a repeated run; nothing is notified twice); STAN: BLAD <powód> with
+# exit 1 when GitHub fails or the result of sw-deploy is missing.
+# A notification the gate refused does not undo the state (the journal keeps the entry).
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[ $# -eq 0 ] || sw_die "uzycie: sw-wdrozony"
+result=.ai/sw-run/wdrozenie.json
+url="$(jq -er '.url' "$result" 2>/dev/null)" || fail "brak $result z adresem wdrozenia (sw-deploy)"
+name="$(jq -r '.nazwa // ""' "$result")"
+[[ "$url" =~ ^http://[0-9.]+:[0-9]+$ ]] || fail "niepoprawny adres wdrozenia: $url"
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+[ -r README.md ] || fail "brak README.md z linkiem do pomyslu"
+link="$(grep -oE "https://github\.com/${control//./\\.}/issues/[0-9]+" README.md | head -1)" || true
+[ -n "$link" ] || fail "README.md nie ma linku do pomyslu w $control"
+number="${link##*/}"
+
+issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+if ! printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == "sw-stan-wdrazanie")' >/dev/null; then
+  echo "WYNIK: POMINIETO issue $number nie jest otwartym projektem w stanie wdrazanie"
+  exit 0
+fi
+
+meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
+  | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+  || fail "niepoprawne metadane issue $number"
+meta="$(jq -c --arg u "$url" '. + {deployUrl: $u}' <<<"$meta")"
+new_body="$(MET="$meta" python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+block = "<!-- sw:meta " + os.environ["MET"] + " -->"
+text, n = re.subn(r"<!-- sw:meta \{.*\} -->", lambda _: block, text, count=1, flags=re.S)
+sys.stdout.write(text if n else text.rstrip("\n") + "\n\n" + block)' <<<"$(printf '%s' "$issue" | jq -r '.body // ""')")" \
+  || fail "nie mozna zlozyc nowej tresci issue $number"
+labels="$(printf '%s' "$issue" | jq -c '[.labels[].name
+  | select(. != "sw-w-ocenie" and . != "sw-zatwierdzony" and . != "sw-czeka-na-limit" and (startswith("sw-stan-") | not))] + ["sw-stan-wdrozony"] | unique')"
+jq -nc --arg b "$new_body" --argjson l "$labels" '{body: $b, labels: $l, state: "closed"}' \
+  | gh api -X PATCH "repos/$control/issues/$number" --input - >/dev/null 2>&1 \
+  || fail "nie mozna przestawic issue $number na stan wdrozony"
+
+"$here/sw-log" "wdrożenie: pomysł #$number: wdrożony" >/dev/null || sw_log "nie mozna zapisac wdrozenia w dzienniku"
+# the title is limited to 100 characters: the address first, the name shortened
+[ -n "$name" ] || name=aplikacja
+head="Wdrożono: $url"
+title="$head (${name:0:$((95 - ${#head}))})"
+"$here/sw-notify" deployed "$control" "$number" "$title" "https://github.com/$control/issues/$number" >/dev/null \
+  || sw_log "powiadomienie o wdrozeniu pomyslu #$number nie zostalo wyslane"
+
+echo "WYNIK: WDROZONY $url"

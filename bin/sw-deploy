@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# sw-deploy — deploys the application of the working directory on the VPS in a container under a
+# private address (spec S10, step 5b); the access is only through a login.
+#   - the application runs in its own container on an INTERNAL Docker network: it publishes no
+#     port and is not reachable from outside, whatever happens later;
+#   - the only entry is an nginx proxy with basic authentication (login of the owner from
+#     $SW_DEPLOY_LOGIN_FILE, "login:haslo", file readable only by the owner, outside the repository),
+#     published on deploy.bindAddress from config/sw.json (never a wildcard address);
+#   - the proxy is started LAST and the deployment is accepted only after the denial test: a request
+#     without login and with a wrong password gets 401, the logged-in owner gets the application;
+#   - ANY failure after the start of the deployment removes both containers and the network (the
+#     trap below), so a failed deployment leaves nothing reachable, neither during nor after it.
+# The application: a Dockerfile in the repository root; the port from its EXPOSE line (default 8080).
+# The result for the next step is .ai/sw-run/wdrozenie.json ({url, nazwa}); sw-wdrozony reads it.
+#
+# Output: WYNIK: WDROZONO <adres> (exit 0) | STAN: BLAD <powód> (exit 1).
+# Overrides (tests): SW_DEPLOY_NAME, SW_DEPLOY_LOGIN_FILE, SW_DEPLOY_DIR (state and proxy files),
+# SW_DEPLOY_POLL (seconds between readiness probes), SW_DEPLOY_BUILD_TIMEOUT.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require docker curl jq openssl
+
+deployed=0 created=0
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[ $# -eq 0 ] || sw_die "uzycie: sw-deploy"
+
+name="${SW_DEPLOY_NAME:-}"
+if [ -z "$name" ]; then
+  name="$(git remote get-url origin 2>/dev/null | sed -E 's#^.*/##; s#\.git$##')" || true
+  [ -n "$name" ] || name="$(basename "$PWD")"
+fi
+slug="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40)"
+[ -n "$slug" ] || fail "nie mozna ustalic nazwy aplikacji"
+app="sw-app-$slug" proxy="sw-proxy-$slug" net="sw-net-$slug"
+
+bind="$(jq -r '.deploy.bindAddress // "127.0.0.1"' "$SW_CONFIG")"
+port_from="$(jq -r '.deploy.portRangeStart // 18100' "$SW_CONFIG")"
+port_to="$(jq -r '.deploy.portRangeEnd // 18199' "$SW_CONFIG")"
+memory="$(jq -r '.deploy.memory // "512m"' "$SW_CONFIG")"
+ready_s="$(jq -r '.deploy.readySeconds // 60' "$SW_CONFIG")"
+proxy_image="$(jq -r '.deploy.proxyImage // "mirror.gcr.io/library/nginx:1.27-alpine"' "$SW_CONFIG")"
+[[ "$bind" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "$bind" != 0.0.0.0 ]] || fail "deploy.bindAddress musi byc konkretnym prywatnym adresem IPv4 (nie 0.0.0.0): $bind"
+[[ "$port_from" =~ ^[0-9]+$ && "$port_to" =~ ^[0-9]+$ && "$port_from" -le "$port_to" ]] || fail "niepoprawny zakres portow wdrozen"
+[[ "$ready_s" =~ ^[0-9]+$ ]] || fail "niepoprawne deploy.readySeconds"
+[[ "$memory" =~ ^[0-9]+[kmg]?$ ]] || fail "niepoprawne deploy.memory"
+
+# the login of the owner: a secret outside the repository, readable only by its owner
+login_file="${SW_DEPLOY_LOGIN_FILE:-$HOME/.sw-deploy/owner-login}"
+[ -r "$login_file" ] || fail "brak pliku z loginem wlasciciela (SW_DEPLOY_LOGIN_FILE, format login:haslo)"
+[ "$(stat -c %a "$login_file" 2>/dev/null | cut -c2-)" = 00 ] || fail "plik z loginem wlasciciela ma za szerokie uprawnienia (chmod 600)"
+cred="$(head -1 "$login_file" | tr -d '\r\n')"
+user="${cred%%:*}" pass="${cred#*:}"
+[[ "$cred" == *:* && "$user" =~ ^[A-Za-z0-9._-]+$ && -n "$pass" ]] || fail "plik z loginem wlasciciela ma zly format (login:haslo)"
+
+[ -f Dockerfile ] || fail "brak Dockerfile w katalogu glownym aplikacji"
+app_port="$(grep -iE '^EXPOSE[[:space:]]' Dockerfile | head -1 | grep -oE '[0-9]+' | head -1)" || true
+app_port="${app_port:-8080}"
+
+remove_all() {
+  # the containers and the network may not exist (a first deployment, a failure before the start): not an error
+  docker rm -f "$proxy" "$app" >/dev/null 2>&1 || true
+  docker network rm "$net" >/dev/null 2>&1 || true
+}
+# a failed deployment leaves nothing behind: the application is never reachable without the login
+cleanup() { if [ "$deployed" -ne 1 ] && [ "$created" -eq 1 ]; then remove_all; sw_log "wdrozenie nieudane: usunieto kontenery i siec $slug"; fi; }
+trap cleanup EXIT
+
+state="${SW_DEPLOY_DIR:-$HOME/.sw-deploy}/$slug"
+(umask 077 && mkdir -p "$state") || fail "nie mozna utworzyc katalogu stanu wdrozenia"
+(umask 077 && printf '%s:%s\n' "$user" "$(printf '%s' "$pass" | openssl passwd -apr1 -stdin)" > "$state/htpasswd") || fail "nie mozna zapisac hasla proxy"
+# shellcheck disable=SC2016  # $host is an nginx variable
+printf 'events {}\nhttp {\n  server {\n    listen 8080;\n    auth_basic "swarm-of-agents";\n    auth_basic_user_file /etc/nginx/sw.htpasswd;\n    location / {\n      proxy_pass http://app:%s;\n      proxy_set_header Host $host;\n      proxy_set_header Authorization "";\n    }\n  }\n}\n' "$app_port" > "$state/nginx.conf" || fail "nie mozna zapisac konfiguracji proxy"
+chmod 600 "$state/nginx.conf" "$state/htpasswd"
+
+# the previous deployment of the application goes first (it frees its port); from here a failure removes everything
+created=1
+remove_all
+
+# a free port of the range on the private address (a redeployment prefers the previous one)
+port_free() { ! (exec 3<>"/dev/tcp/$bind/$1") 2>/dev/null; }
+port=""
+candidates=("$port_from")
+[ ! -s "$state/port" ] || candidates=("$(cat "$state/port")" "$port_from")
+for p in "${candidates[@]}" $(seq "$port_from" "$port_to"); do
+  [[ "$p" =~ ^[0-9]+$ && "$p" -ge "$port_from" && "$p" -le "$port_to" ]] || continue
+  if port_free "$p"; then port="$p"; break; fi
+done
+[ -n "$port" ] || fail "brak wolnego portu w zakresie $port_from-$port_to na adresie $bind (brak zasobow VPS)"
+url="http://$bind:$port"
+
+# the answer code of the address; the login goes through a curl config, never through the arguments
+http_code() {
+  local out
+  if [ -n "${1:-}" ]; then
+    out="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+      --config <(printf 'user = "%s"\n' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')") "$url/" 2>/dev/null)"
+  else
+    out="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$url/" 2>/dev/null)"
+  fi
+  echo "${out:-000}"
+}
+
+sw_log "wdrozenie $slug: budowa obrazu"
+timeout "${SW_DEPLOY_BUILD_TIMEOUT:-900}" docker build -t "$app:latest" . >/dev/null || fail "nie mozna zbudowac obrazu aplikacji (docker build)"
+docker network create --internal "$net" >/dev/null || fail "nie mozna utworzyc sieci $net"
+docker run -d --name "$app" --network "$net" --network-alias app --restart unless-stopped \
+  --memory "$memory" --pids-limit 256 --security-opt no-new-privileges "$app:latest" >/dev/null \
+  || fail "nie mozna uruchomic kontenera aplikacji"
+[ -z "$(docker port "$app" 2>/dev/null)" ] || fail "kontener aplikacji publikuje port"
+
+# the proxy last: created on the bridge with the only published port, joined to the internal network before the start
+docker create --name "$proxy" --restart unless-stopped -p "$bind:$port:8080" \
+  -v "$state/nginx.conf:/etc/nginx/nginx.conf:ro" -v "$state/htpasswd:/etc/nginx/sw.htpasswd:ro" \
+  "$proxy_image" >/dev/null || fail "nie mozna utworzyc kontenera proxy"
+docker network connect "$net" "$proxy" >/dev/null || fail "nie mozna podlaczyc proxy do sieci aplikacji"
+docker start "$proxy" >/dev/null || fail "nie mozna uruchomic proxy"
+
+started=$SECONDS code=000
+while :; do
+  code="$(http_code "$cred")"
+  [[ "$code" =~ ^[23] ]] && break
+  [ $((SECONDS - started)) -lt "$ready_s" ] || fail "aplikacja nie odpowiada po zalogowaniu (ostatni kod $code) po ${ready_s}s"
+  sleep "${SW_DEPLOY_POLL:-2}"
+done
+
+# the denial test: without the login and with a wrong password the answer is a refusal, never the application
+for attempt in "" "$user:zle-haslo-$$"; do
+  code="$(http_code "$attempt")"
+  case "$code" in
+    401 | 403) ;;
+    *) fail "zadanie ${attempt:+z blednym haslem }bez poprawnego logowania zwrocilo $code zamiast odmowy" ;;
+  esac
+done
+
+printf '%s\n' "$port" > "$state/port"
+mkdir -p .ai/sw-run
+jq -n --arg url "$url" --arg nazwa "$name" '{url: $url, nazwa: $nazwa}' > .ai/sw-run/wdrozenie.json || fail "nie mozna zapisac .ai/sw-run/wdrozenie.json"
+deployed=1
+echo "WYNIK: WDROZONO $url"

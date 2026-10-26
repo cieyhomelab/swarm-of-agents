@@ -41,9 +41,17 @@
 #    bin/sw-przeglad decides (the verdict AND all four points, secrets also scanned by the
 #    script) and on "pass" writes docs/security/<date>-raport.md. The report goes through a PR
 #    of the module pipeline (review, CI, security, merge); the merged report ends the task,
-#    so nothing is deployed before it (step 5b). On "fail" a fix round of the engineer
+#    so nothing is deployed before it. On "fail" a fix round of the engineer
 #    (rounds-app) starts: its fix goes through a NEW PR, the tests and the review run again.
 #    Exhausted rounds pause the project.
+#
+# 8. Deployment (S10): sw-stan-wdrazanie, bin/sw-deploy (container on the VPS under the private
+#    address deploy.bindAddress, the only entry a proxy with login; the denial test of a request
+#    without login; a failure removes everything it started), then bin/sw-wdrozony: state
+#    sw-stan-wdrozony, the issue of the idea closed (the generator starts in the next cycle) and
+#    a notification with the title and the address. A failed deployment is retried at most
+#    retriesPerTask times (rounds-deploy; a test keeps it equal to config/sw.json), then the
+#    project is paused.
 #
 # Every ending without a merge ends the task with status success on purpose (cezar-push
 # alerts the owner for every failed task, and the spec allows no such messages). The
@@ -630,9 +638,42 @@ nodes:
     command: |
       bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'testy E2E aplikacji: porażki albo brak pokrycia po wyczerpaniu rund poprawek'
 
+  - id: state-deploy
+    type: check
+    name: Stan projektu - wdrażanie
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-stan" przeglad wdrazanie
+
+  - id: limits-deploy
+    type: check
+    name: Limity projektu (przed wdrożeniem)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: deploy
+    type: check
+    name: Wdrożenie na VPS pod prywatnym adresem i test odmowy bez logowania (sw-deploy)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-deploy"
+
+  - id: finish
+    type: check
+    name: Stan wdrożony i powiadomienie właściciela (sw-wdrozony)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-wdrozony"
+
+  - id: rounds-deploy
+    type: loop
+    name: Ponowienia wdrożenia
+    max: 2
+
+  - id: pause-deploy
+    type: check
+    name: Wstrzymanie projektu po nieudanym wdrożeniu
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'wdrożenie: nieudane po wyczerpaniu ponowień'
+
   - id: done
     type: end
-    name: Moduł zmergowany, E2E zielone, przegląd bezpieczeństwa aplikacji zaliczony, raport w repozytorium
+    name: Aplikacja wdrożona pod prywatnym adresem, właściciel powiadomiony, projekt w stanie wdrożony
     status: success
 
   - id: stopped
@@ -744,7 +785,7 @@ edges:
   - { from: limits-merge-mod.pass, to: merge-mod }
   - { from: limits-merge-mod.fail, to: stopped }
   - { from: merge-mod.pass, to: report-merged }
-  - { from: report-merged.pass, to: done }
+  - { from: report-merged.pass, to: state-deploy }
   - { from: report-merged.fail, to: state-integ }
   - { from: merge-mod.fail, to: stopped }
 
@@ -783,6 +824,19 @@ edges:
   - { from: pause-rounds-app.pass, to: stopped }
   - { from: pause-rounds-app.fail, to: stopped }
   - { from: state-review.fail, to: stopped }
+
+  - { from: state-deploy.pass, to: limits-deploy }
+  - { from: state-deploy.fail, to: stopped }
+  - { from: limits-deploy.pass, to: deploy }
+  - { from: limits-deploy.fail, to: stopped }
+  - { from: deploy.pass, to: finish }
+  - { from: deploy.fail, to: rounds-deploy }
+  - { from: finish.pass, to: done }
+  - { from: finish.fail, to: rounds-deploy }
+  - { from: rounds-deploy.repeat, to: limits-deploy }
+  - { from: rounds-deploy.exhausted, to: pause-deploy }
+  - { from: pause-deploy.pass, to: stopped }
+  - { from: pause-deploy.fail, to: stopped }
 
   - { from: rounds-test.repeat, to: limits-fix-test }
   - { from: rounds-test.exhausted, to: pause-rounds-test }

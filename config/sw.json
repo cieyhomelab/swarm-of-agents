@@ -14,6 +14,14 @@
   "githubOwner": "cieyhomelab",
   "controlRepo": "cieyhomelab/sw-control",
   "requiredChecks": ["checks", "e2e"],
+  "deploy": {
+    "bindAddress": "127.0.0.1",
+    "portRangeStart": 18100,
+    "portRangeEnd": 18199,
+    "memory": "512m",
+    "readySeconds": 60,
+    "proxyImage": "mirror.gcr.io/library/nginx:1.27-alpine"
+  },
   "models": {
     "generator": "opus",
     "analyst": "opus",

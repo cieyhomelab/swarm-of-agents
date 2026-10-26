@@ -34,6 +34,11 @@ setup() {
              {"project": "proj", "id": "review-mod", "modelIdentity": "anthropic/sonnet[1m]"},
              {"project": "proj", "id": "security-mod", "modelIdentity": "anthropic/haiku[1m]"}]}' >/dev/null
   export MOCK_AGENT="$WORK/agent" MOCK_CI="$WORK/ci" PATH="$home/tests/fakes:$PATH"
+  # S10 the deployment: the real bin/sw-deploy against the fake Docker (tests/fakes/docker) with a real listener
+  export FAKE_DOCKER_DIR="$WORK/docker" FAKE_DOCKER_LOGIN="wlasciciel:sekretne-haslo" SW_DEPLOY_DIR="$WORK/deploy" SW_DEPLOY_NAME=planer SW_DEPLOY_POLL=0.1
+  export SW_DEPLOY_LOGIN_FILE="$WORK/login"; printf '%s\n' "$FAKE_DOCKER_LOGIN" > "$SW_DEPLOY_LOGIN_FILE"; chmod 600 "$SW_DEPLOY_LOGIN_FILE"
+  printf 'FROM scratch\nEXPOSE 3000\n' > Dockerfile
+  jq '.deploy.readySeconds = 1' "$home/config/sw.json" > "$WORK/sw.json"; export SW_CONFIG="$WORK/sw.json"
   cat > "$MOCK_AGENT" <<'AGENT'
 #!/usr/bin/env bash
 # Mock agents of sw-build. architect and fix write a complete architecture (a line in
@@ -102,7 +107,10 @@ AGENT
     "'{\"pulls\": {\"cieyhomelab/app#3\": {\"head_sha\": \"abc1234\", \"branch\": \"build\", \"draft\": true, \"body\": \"Modul\"}}}'" > "$MOCK_GIT"; chmod +x "$MOCK_GIT"
 }
 
-teardown() { cd / && rm -rf "$WORK"; }
+teardown() {
+  for f in "$FAKE_DOCKER_DIR"/pid-*; do [ ! -e "$f" ] || kill "$(cat "$f")" 2>/dev/null || true; done
+  cd / && rm -rf "$WORK"
+}
 
 state() { curl -fsS -X POST -d '{}' "$MOCK_URL/__control"; }
 pr() { curl -fsS "$MOCK_URL/github/repos/cieyhomelab/app/pulls/3"; }
@@ -278,7 +286,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   [[ "$output" == *"TRACE e2e-check pass"* && "$output" == *"TRACE e2e-run pass"* && "$output" == *"TRACE tester pass"* ]]
   [[ "$output" == *"END done success"* ]]
   [ "$(called tester)" -eq 1 ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-przeglad"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
   # every scenario of the specification has an E2E test
   grep -q 'S1' tests/e2e/app.bats && grep -q 'S2' tests/e2e/app.bats
 }
@@ -294,7 +302,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   [ "$(called review-mod)" -eq 3 ]
   [ "$(called security-mod)" -eq 3 ]
   [[ "$output" == *"TRACE tester pass"* && "$output" == *"END done success"* ]]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-przeglad"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
 }
 
 @test "S7 a failing E2E run of the whole application sends the engineer a fix round" {
@@ -316,7 +324,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   [[ "$output" == *"TRACE tester fail"* && "$output" == *"TRACE rounds-test repeat"* ]]
   [ "$(called tester)" -eq 2 ]
   [ "$(called fix-test)" -eq 1 ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-przeglad"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
 }
 
 @test "S8 fixRoundsPerPr rounds after failed tests pause the project even with no open PR" {
@@ -347,7 +355,7 @@ report() { ls docs/security/*-raport.md; }
   [[ "$output" =~ ^docs/security/[0-9]{4}-[0-9]{2}-[0-9]{2}-raport\.md$ ]]
   for n in 1 2 3 4; do grep -qE "^\| $n\. .* \| pass \|" docs/security/*-raport.md; done
   [ "$(pr | jq .merged)" = "true" ]
-  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-przeglad"]' ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
 }
 
 @test "S9 a function of an excluded category stops the deployment and starts a fix task of the engineer" {
@@ -415,6 +423,70 @@ report() { ls docs/security/*-raport.md; }
   ! ls docs/security/*-raport.md 2>/dev/null
   [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
   [ "$(pushes | jq length)" -eq 1 ]
+}
+
+# S10: the deployment and the notification of the owner
+deployed() { curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${2:+-u "$2"} "$1/" || true; }
+addr=http://127.0.0.1:18100
+
+@test "S10 after the green tests and the positive review the application is deployed: a request without the login is refused, the owner sees the application" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE report-merged pass"* && "$output" == *"TRACE state-deploy pass"* && "$output" == *"TRACE deploy pass"* ]]
+  [[ "$output" == *"TRACE finish pass"* && "$output" == *"END done success"* ]]
+  [ "$(deployed $addr)" = 401 ]
+  [ "$(deployed $addr "$FAKE_DOCKER_LOGIN")" = 200 ]
+  [ "$(deployed $addr wlasciciel:zle)" = 401 ]
+  # the application container publishes nothing; the proxy is the only published port, on the private address
+  [ "$(grep '^run ' "$FAKE_DOCKER_DIR/calls" | grep -c -- ' -p ')" -eq 0 ]
+  [ "$(grep '^create ' "$FAKE_DOCKER_DIR/calls" | grep -c -- '-p 127.0.0.1:18100:8080')" -eq 1 ]
+}
+
+@test "S10 a deployment gives the owner one notification with the title and the address, and the project is wdrozony" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wdrozony"]' ]
+  [ "$(idea | jq -r .state)" = closed ]
+  [ "$(idea | jq -r .body | grep -c "$addr")" -ge 1 ]
+  [ "$(pushes | jq length)" -eq 1 ]
+  [ "$(pushes | jq -r '.[0].body.title')" = "Wdrożono: $addr (planer)" ]
+  [ "$(pushes | jq -r '.[0].body.url')" = https://github.com/cieyhomelab/sw-control/issues/7 ]
+}
+
+@test "S10 a deployed project is no longer active: the next cycle starts the generator" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  run "$home/bin/sw-gate"
+  [[ "$output" == *"URUCHOM: GENERATOR"* ]]
+}
+
+@test "S10 a failed deployment is retried retriesPerTask times, leaves nothing reachable and pauses the project" {
+  retries="$(jq -r .retriesPerTask "$home/config/sw.json")"
+  export FAKE_DOCKER_MODE=dead
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [ "$(grep -c "^TRACE deploy fail" <<<"$output")" -eq $((retries + 1)) ]
+  [[ "$output" == *"TRACE rounds-deploy exhausted"* && "$output" == *"TRACE pause-deploy pass"* && "$output" == *"END stopped success"* ]]
+  [ "$(deployed $addr)" = 000 ]
+  [ "$(deployed $addr "$FAKE_DOCKER_LOGIN")" = 000 ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
+  [ "$(pushes | jq length)" -eq 1 ]
+  [[ "$(pushes | jq -r '.[0].body.title')" == "Projekt wstrzymany: wdrożenie"* ]]
+}
+
+@test "S10 a proxy that would serve the application without the login fails the deployment, nothing is reachable and no notification says deployed" {
+  export FAKE_DOCKER_MODE=open
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE deploy fail"* && "$output" == *"TRACE pause-deploy pass"* ]]
+  [[ "$output" != *"TRACE finish"* ]]
+  [ "$(deployed $addr)" = 000 ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
 }
 
 @test "S5 stage 2: the last node of sw-spec starts sw-build instead of the handover" {
