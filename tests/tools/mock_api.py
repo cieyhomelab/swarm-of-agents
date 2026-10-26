@@ -42,7 +42,8 @@ Routes:
   GET  /github/repos/<o>/<r>/commits?sha=<branch>&per_page=1  [{commit: {committer: {date}}}] from state "commits"
                                   ("<o>/<r>@<branch>" -> ISO time of the last commit); empty for an unknown branch
   GET/POST /github/repos/<o>/<r>/labels, /issues[?labels=&state=]  labels and issues of any repository other than
-                                  the control one (state "app_labels", "app_issues": "<o>/<r>" -> list)
+                                  the control one (state "app_labels", "app_issues": "<o>/<r>" -> list);
+                                  GET/PATCH /issues/<n> there: one issue, labels / state
   POST /__control                 change state, e.g. {"health_status": 503}
   GET  /__requests                requests received so far (JSON list)
 
@@ -218,6 +219,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"sha": entry["sha"], "content": entry["content"]})
         if self._app_repo("GET", url, b""):
             return
+        app_issue = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/issues/(\d+)", url.path)
+        if app_issue and app_issue[1] != STATE["control_repo"]:
+            found = [i for i in STATE["app_issues"].get(app_issue[1], []) if i["number"] == int(app_issue[2])]
+            return self._send(200, found[0]) if found else self._send(404, {"message": "Not Found"})
         return self._send(404, {"message": "Not Found"})
 
     def _app_repo(self, method, url, raw):
@@ -381,6 +386,17 @@ class Handler(BaseHTTPRequestHandler):
             if not found:
                 return self._send(404, {"message": "Not Found"})
             found[0]["maxParallel"] = json.loads(raw or b"{}").get("maxParallel")
+            return self._send(200, found[0])
+        app_issue = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/issues/(\d+)", self.path)
+        if app_issue:
+            found = [i for i in STATE["app_issues"].get(app_issue[1], []) if i["number"] == int(app_issue[2])]
+            if not found:
+                return self._send(404, {"message": "Not Found"})
+            update = json.loads(raw or b"{}")
+            if "labels" in update:
+                found[0]["labels"] = [{"name": n} for n in update["labels"]]
+            if "state" in update:
+                found[0]["state"] = update["state"]
             return self._send(200, found[0])
         pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
         item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}") if pull else None

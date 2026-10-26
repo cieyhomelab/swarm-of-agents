@@ -61,6 +61,14 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 - Przegląd bezpieczeństwa pełnej aplikacji (S9): po `sw-stan-przeglad` `sw-bezpieczenstwo` (tryb `aplikacja`) zapisuje wynik czterech punktów w `.ai/sw-run/przeglad.json`, a `bin/sw-przeglad` rozstrzyga (werdykt i wszystkie punkty `pass`; sekrety dodatkowo skanuje sam). Wynik pozytywny daje `docs/security/<data>-raport.md`, który przechodzi PR modułu (recenzja, CI, bezpieczeństwo, `sw-merge kod`); dopiero zmergowany raport otwiera wdrożenie (sekcja „Wdrożenie”). Wynik negatywny to runda poprawek inżyniera (`rounds-app`, `fixRoundsPerPr`) z nowym PR, ponownymi testami E2E i ponownym przeglądem; wyczerpane rundy wstrzymują projekt.
 - Uwaga: gałąź zadania `sw-build` po merge'u architektury dostaje kolejne commity i drugi PR (to samo `git.draft-pr`); działanie na prawdziwym Cezarze trzeba potwierdzić według „Sprawdzenie na VPS”.
 
+## Przydział modułów (etap 3, krok 2, S6)
+- `bin/sw-kierownik` (skill `sw-kierownik`, model `chores`) zarządza stanem modułów, którym jest etykieta issue „Moduł: <modul>”: `sw-modul-do-zrobienia` → `sw-modul-w-pracy` → `sw-modul-zmergowany`.
+  - `przydziel` czyta `maxParallelAgents` z `config/sw.json` przy każdym wywołaniu, ustawia go jako `maxParallel` projektu w Cezarze (`CEZ_PROJECT_ID`) i przenosi na `w-pracy` najwyżej tyle modułów, ile zostawia wolnych miejsc limit (niższy numer issue pierwszy); każdy moduł wypisuje jako `URUCHOM: <modul>`.
+  - Moduł jest gotowy, gdy każdy moduł z jego `## Wymaga` ma kontrakt (issue), bo implementacja opiera się na kontrakcie, a nie na gotowym module.
+  - `zmergowany <modul>` przenosi `w-pracy` na `zmergowany` i zamyka issue; `stan` liczy moduły w trzech stanach.
+- `workflows/sw-build.yml` woła `przydziel` węzłem `kierownik` przed inżynierem, a `zmergowany` węzłem `kierownik-merged` po merge'u PR modułu. Zadania modułów dla wielu inżynierów naraz zakłada agent `sw-kierownik` z linii `URUCHOM`; podpięcie ich do `sw-build` (węzły `dispatch`) i integracja to krok 3 etapu 3.
+- Testy: `tests/integration/sw_kierownik.bats`, `tests/e2e/kierownik.bats` i testy `S6` w `tests/e2e/build.bats`.
+
 ## Wdrożenie (etap 2, krok 5b)
 - Po zmergowanym raporcie z przeglądu `workflows/sw-build.yml` przestawia projekt na `sw-stan-wdrazanie` (`bin/sw-stan`) i uruchamia `bin/sw-deploy`; potem `bin/sw-wdrozony` ustawia `sw-stan-wdrozony`, zapisuje adres w metadanych pomysłu (`deployUrl`), zamyka issue pomysłu (generator rusza w następnym cyklu) i wysyła `sw-notify deployed` (tytuł z adresem, link do issue pomysłu).
 - `sw-deploy` buduje obraz z `Dockerfile` repozytorium (port z `EXPOSE`, domyślnie 8080) i uruchamia kontener na sieci Docker `--internal`, bez publikowanych portów. Jedynym wejściem jest proxy nginx z logowaniem (basic auth), opublikowane na `deploy.bindAddress`. Proxy startuje jako ostatnie, a wdrożenie jest przyjęte dopiero po teście odmowy: żądanie bez logowania i z błędnym hasłem dostaje 401/403, zalogowany właściciel widzi aplikację.
@@ -73,7 +81,7 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 | Pole | Domyślnie | Znaczenie (specyfikacja) |
 |------|-----------|--------------------------|
 | `stage` | 1 | przełącznik etapu po zmergowanej specyfikacji (`bin/sw-build-start`): 1 przekazuje projekt łańcuchowi sh-* (`sw-handover-sh`), 2 uruchamia workflow `sw-build` i ustawia `sw-stan-architektura`; brak pola = 1 |
-| `multiModule` | false | tryb architekta (S5, etap 3): `false` = jeden moduł, `true` = co najmniej dwa moduły z `Wymaga` i `Testy kontraktu`; brak pola = `false`. Włącz dopiero, gdy kierownik przydziela moduły równolegle (kolejny krok etapu 3): `sw-build` implementuje wciąż jeden moduł |
+| `multiModule` | false | tryb architekta (S5, etap 3): `false` = jeden moduł, `true` = co najmniej dwa moduły z `Wymaga` i `Testy kontraktu`; brak pola = `false`. Włącz dopiero po kroku integracji etapu 3: kierownik już przydziela moduły do limitu (sekcja „Przydział modułów”), ale `sw-build` implementuje wciąż jeden moduł |
 | `cycleHours` | 1 | interwał cyklu; automatyzacja „sw: przegląd co godzinę” |
 | `maxParallelAgents` | 3 | limit równoległych agentów projektu → `maxParallel` projektu w Cezarze (S6) |
 | `projectTimeLimitHours` | 168 | limit czasu projektu od zatwierdzenia pomysłu (S12) |
