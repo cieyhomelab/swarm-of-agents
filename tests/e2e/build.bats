@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# E2E (S5 one module, S8): the sw-build workflow of an application repository, walked by
+# E2E (S5 one module, S6, S7, S8): the sw-build workflow of an application repository, walked by
 # tests/tools/run_workflow.py with a mock agent, against the mocked Cezar, GitHub and
 # cezar-push APIs. The scripts run exactly as on the VPS (sw-limits, sw-architektura-check,
 # sw-spec-pr -> sw-merge kod, sw-pause). What the agents write is not tested here
@@ -16,7 +16,8 @@ setup() {
   SW_PUSH_TOKEN_FILE="$WORK/token"; echo test-token > "$SW_PUSH_TOKEN_FILE"; export SW_PUSH_TOKEN_FILE
   export CEZ_PROJECT_ID=proj SW_SPEC_REPO=cieyhomelab/app SW_SPEC_BRANCH=build
   export FAKE_GH_API_URL="$MOCK_URL" CALLS="$WORK/calls" REVIEWS="$WORK/reviews" CIS="$WORK/cis" BREAK="$WORK/break"
-  : > "$CALLS"; : > "$CIS"; : > "$BREAK"
+  export BREAKE2E="$WORK/breake2e" FAILE2E="$WORK/faile2e" TESTERS="$WORK/testers" MOCK_URL
+  : > "$CALLS"; : > "$CIS"; : > "$BREAK"; : > "$BREAKE2E"; : > "$FAILE2E"; echo pass > "$TESTERS"
   printf '# Planer\n\nPomysł i jego ocena: https://github.com/cieyhomelab/sw-control/issues/7\n' > README.md
   printf '# Planer\n\n### S1: Menu\n- Zakładając tydzień, wtedy lista zakupów.\n\n### S2: Lista\n- Zakładając menu, wtedy lista.\n\n## Założenia\n- Język polski.\n' > .ai/specs/spec.md
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
@@ -28,7 +29,10 @@ setup() {
                                                 {"name":"e2e","status":"completed","conclusion":"success"}]},
     "runs": [{"project": "proj", "id": "architect", "modelIdentity": "anthropic/opus[1m]"},
              {"project": "proj", "id": "review", "modelIdentity": "anthropic/sonnet[1m]"},
-             {"project": "proj", "id": "security", "modelIdentity": "anthropic/haiku[1m]"}]}' >/dev/null
+             {"project": "proj", "id": "security", "modelIdentity": "anthropic/haiku[1m]"},
+             {"project": "proj", "id": "engineer", "modelIdentity": "anthropic/opus[1m]"},
+             {"project": "proj", "id": "review-mod", "modelIdentity": "anthropic/sonnet[1m]"},
+             {"project": "proj", "id": "security-mod", "modelIdentity": "anthropic/haiku[1m]"}]}' >/dev/null
   export MOCK_AGENT="$WORK/agent" MOCK_CI="$WORK/ci" PATH="$home/tests/fakes:$PATH"
   cat > "$MOCK_AGENT" <<'AGENT'
 #!/usr/bin/env bash
@@ -45,18 +49,38 @@ case "$1" in
     printf '# planer\n\n## Udostępnia\n- ekran menu\n\n## Wymaga\nbrak\n\n## Forma\nczęść aplikacji\nJedna aplikacja.\n\n## Scenariusze\n%s\n' "$scenarios" > docs/kontrakty/planer.md
     printf 'name: CI\non:\n  pull_request:\njobs:\n  checks:\n    runs-on: ubuntu-latest\n    steps: [{run: "true"}]\n  e2e:\n    runs-on: ubuntu-latest\n    steps: [{run: "true"}]\n' > .github/workflows/ci.yml
     echo gotowa ;;
-  review)
+  engineer | fix-mod | fix-test)
+    # the module: a test for every "udostępnia" item and an E2E test for every scenario
+    # ($BREAKE2E leaves S2 out of the first implementation, $FAILE2E makes the E2E fail until fix-test)
+    mkdir -p src tests/unit tests/e2e scripts
+    echo 'echo menu' > src/menu.sh
+    echo '@test "ekran menu" { true; }' > tests/unit/menu.bats
+    sed -i '/^## Pokrycie/,$d' docs/kontrakty/planer.md
+    printf '\n## Pokrycie\n- ekran menu => tests/unit/menu.bats\n' >> docs/kontrakty/planer.md
+    echo '@test "S1: menu tygodnia" { true; }' > tests/e2e/app.bats
+    if [ "$1" != engineer ] || [ ! -s "$BREAKE2E" ]; then echo '@test "S2: lista zakupów" { true; }' >> tests/e2e/app.bats; fi
+    if [ "$1" = fix-test ]; then : > "$FAILE2E"; fi
+    printf '#!/usr/bin/env bash\n[ ! -s "%s" ]\n' "$FAILE2E" > scripts/test-e2e.sh
+    echo "$1 $(date +%N)" > "src/rev-$1"
+    echo gotowa ;;
+  tester)
+    verdict="$(head -1 "$TESTERS")"; sed -i 1d "$TESTERS"
+    [ "$verdict" = fail ] && echo "1. S2: test nie sprawdza skutku." > .ai/sw-run/uwagi.md
+    echo "$verdict" ;;
+  review | review-mod)
     verdict="$(head -1 "$REVIEWS")"; sed -i 1d "$REVIEWS"
     [ "$verdict" = changes ] && echo "1. Kontrakt jest niejasny." > .ai/sw-run/uwagi.md
     echo "$verdict" ;;
-  security)
+  security | security-mod)
     if grep -rqE '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\.[a-z]+' docs .github; then echo fail; else echo pass; fi ;;
 esac
 AGENT
   chmod +x "$MOCK_AGENT"
   printf '#!/usr/bin/env bash\necho "ci-$2" >> "$CALLS"\nhead -1 "$CIS" | grep . || echo green\nsed -i 1d "$CIS"\n' > "$MOCK_CI"; chmod +x "$MOCK_CI"
   export MOCK_GIT="$WORK/git"
-  printf '#!/usr/bin/env bash\necho "$1" >> "$CALLS"\n' > "$MOCK_GIT"; chmod +x "$MOCK_GIT"
+  # the module PR is a new PR of the branch: after the merge of the architecture the mock PR is open again
+  printf '#!/usr/bin/env bash\necho "$1" >> "$CALLS"\n[ "$1" != pr-mod ] || curl -fsS -X POST "$MOCK_URL/__control" -d %s >/dev/null\n' \
+    "'{\"pulls\": {\"cieyhomelab/app#3\": {\"head_sha\": \"abc1234\", \"branch\": \"build\", \"draft\": true, \"body\": \"Modul\"}}}'" > "$MOCK_GIT"; chmod +x "$MOCK_GIT"
 }
 
 teardown() { cd / && rm -rf "$WORK"; }
@@ -71,7 +95,7 @@ called() { grep -c "^$1\$" "$CALLS" || true; }
 idea() { state | jq -c '.issues[] | select(.number == 7)'; }
 
 @test "S5 an approved review, a green CI and passed security merge the architecture PR with sw-merge kod" {
-  reviews approve
+  reviews approve approve
   build
   [ "$status" -eq 0 ]
   [[ "$output" == *"END done success"* ]]
@@ -84,7 +108,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
 }
 
 @test "S5 the architecture check runs on the PR: contract, assigned scenarios, CI jobs" {
-  reviews approve
+  reviews approve approve
   build
   [ "$status" -eq 0 ]
   [[ "$output" == *"TRACE arch-check pass"* ]]
@@ -95,7 +119,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
 
 @test "S5 a scenario left unassigned starts a fix round before the review" {
   echo broken > "$BREAK"
-  reviews approve
+  reviews approve approve
   build
   [ "$status" -eq 0 ]
   [[ "$output" == *"TRACE arch-check fail"* ]]
@@ -107,7 +131,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
 }
 
 @test "S8 remarks of the reviewer start a fix round and a repeated review" {
-  reviews changes approve
+  reviews changes approve approve
   build
   [ "$status" -eq 0 ]
   [[ "$output" == *"TRACE review changes"* ]]
@@ -118,7 +142,7 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
 }
 
 @test "S8 a red CI starts a fix round, a green one lets the PR merge" {
-  reviews approve approve
+  reviews approve approve approve
   cis red green
   build
   [ "$status" -eq 0 ]
@@ -173,6 +197,118 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   [[ "$output" == *"END stopped success"* ]]
   [ "$(called architect)" -eq 0 ]
   [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
+}
+
+@test "S6 the module goes through its own PR: engineer, test for every item, review, CI, security, sw-merge kod" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE state-impl pass"* && "$output" == *"TRACE limits-engineer pass"* ]]
+  [[ "$output" == *"TRACE mod-check pass"* && "$output" == *"TRACE merge-mod pass"* ]]
+  [[ "$output" == *"TRACE limits-review-mod pass"* && "$output" == *"TRACE limits-merge-mod pass"* ]]
+  [ "$(called engineer)" -eq 1 ]
+  [ "$(called review-mod)" -eq 1 ]
+  [ "$(called security-mod)" -eq 1 ]
+  grep -q '^- ekran menu => tests/unit/menu.bats$' docs/kontrakty/planer.md
+  [ "$(pr | jq .merged)" = "true" ]
+}
+
+@test "S6 an item of 'udostępnia' without a test starts a fix round before the review" {
+  # the engineer names a missing test file once: the check fails, the fix round repairs it
+  printf '#!/usr/bin/env bash\n[ "$1" != pr-mod ] || [ -e .ai/sw-run/seen ] || { touch .ai/sw-run/seen; rm tests/unit/menu.bats; }\n[ "$1" != pr-mod ] || curl -fsS -X POST "$MOCK_URL/__control" -d %s >/dev/null\necho "$1" >> "$CALLS"\n' \
+    "'{\"pulls\": {\"cieyhomelab/app#3\": {\"head_sha\": \"abc1234\", \"branch\": \"build\", \"draft\": true, \"body\": \"Modul\"}}}'" > "$WORK/nottest"
+  chmod +x "$WORK/nottest"
+  reviews approve approve
+  MOCK_GIT="$WORK/nottest" build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE mod-check fail"* && "$output" == *"TRACE rounds-mod repeat"* ]]
+  [[ "$output" == *"TRACE mod-check-fix pass"* ]]
+  [ "$(called fix-mod)" -eq 1 ]
+  [ "$(pr | jq .merged)" = "true" ]
+}
+
+@test "S8 remarks on the module PR start a fix round of the engineer and a repeated review" {
+  reviews approve changes approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE review-mod changes"* ]]
+  [ "$(called fix-mod)" -eq 1 ]
+  [ "$(called review-mod)" -eq 2 ]
+  [ "$(called security-mod)" -eq 1 ]
+  [ "$(pr | jq .merged)" = "true" ]
+}
+
+@test "S8 fixRoundsPerPr rounds of remarks on the module PR pause the project" {
+  rounds="$(jq -r .fixRoundsPerPr "$home/config/sw.json")"
+  reviews approve changes changes changes changes changes
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE rounds-mod exhausted"* && "$output" == *"TRACE pause-rounds-mod pass"* ]]
+  [ "$(called fix-mod)" -eq "$rounds" ]
+  [ "$(called security-mod)" -eq 0 ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
+  [ "$(pushes | jq length)" -eq 1 ]
+}
+
+@test "S7 a green E2E and the verdict pass of the tester move the project to sw-stan-przeglad" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE e2e-check pass"* && "$output" == *"TRACE e2e-run pass"* && "$output" == *"TRACE tester pass"* ]]
+  [[ "$output" == *"END done success"* ]]
+  [ "$(called tester)" -eq 1 ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-przeglad"]' ]
+  # every scenario of the specification has an E2E test
+  grep -q 'S1' tests/e2e/app.bats && grep -q 'S2' tests/e2e/app.bats
+}
+
+@test "S7 a scenario without an E2E test starts a fix round, the project waits in sw-stan-integracja" {
+  echo broken > "$BREAKE2E"
+  reviews approve approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE e2e-check fail"* && "$output" == *"TRACE rounds-test repeat"* ]]
+  [ "$(called fix-test)" -eq 1 ]
+  # the fix goes through a new PR: a second review and a second security review
+  [ "$(called review-mod)" -eq 2 ]
+  [ "$(called security-mod)" -eq 2 ]
+  [[ "$output" == *"TRACE tester pass"* && "$output" == *"END done success"* ]]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-przeglad"]' ]
+}
+
+@test "S7 a failing E2E run of the whole application sends the engineer a fix round" {
+  echo broken > "$FAILE2E"
+  reviews approve approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE e2e-run fail"* && "$output" == *"TRACE rounds-test repeat"* ]]
+  [ "$(called fix-test)" -eq 1 ]
+  [ "$(called tester)" -eq 1 ]
+  [[ "$output" == *"END done success"* ]]
+}
+
+@test "S7 remarks of the tester start a fix round and the project does not reach sw-stan-przeglad before it passes" {
+  printf 'fail\npass\n' > "$TESTERS"
+  reviews approve approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE tester fail"* && "$output" == *"TRACE rounds-test repeat"* ]]
+  [ "$(called tester)" -eq 2 ]
+  [ "$(called fix-test)" -eq 1 ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-przeglad"]' ]
+}
+
+@test "S8 fixRoundsPerPr rounds after failed tests pause the project even with no open PR" {
+  rounds="$(jq -r .fixRoundsPerPr "$home/config/sw.json")"
+  printf 'fail\nfail\nfail\nfail\nfail\n' > "$TESTERS"
+  reviews approve approve approve approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE rounds-test exhausted"* && "$output" == *"TRACE pause-rounds-test pass"* ]]
+  [[ "$output" == *"END stopped success"* ]]
+  [ "$(called fix-test)" -eq "$rounds" ]
+  [ "$(idea | jq -c '[.labels[].name]')" = '["sw-pomysl","sw-stan-wstrzymany"]' ]
+  [ "$(pushes | jq length)" -eq 1 ]
 }
 
 @test "S5 stage 2: the last node of sw-spec starts sw-build instead of the handover" {

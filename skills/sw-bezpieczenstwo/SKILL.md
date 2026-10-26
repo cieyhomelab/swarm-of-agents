@@ -43,6 +43,8 @@ Wykonywany w workflowu `sw-build` (zadanie `Budowa aplikacji: <owner>/<repo>#<nu
 - szkielet bez uwierzytelnienia tam, gdzie specyfikacja przewiduje dane prywatne, hasła przechowywane jawnym tekstem albo dostęp do danych bez logowania;
 - kategorię wykluczoną (zestaw wzorcowy) wprowadzoną przez architekturę.
 
+Ten sam tryb obejmuje PR modułu (po merge'u architektury), gdy prompt węzła tak mówi. Do listy dochodzą wtedy `fail` dla: wstrzyknięcia poleceń lub zapytań z danych użytkownika (powłoka, SQL, szablony), dostępu do danych prywatnych bez sprawdzenia uwierzytelnienia, haseł i sesji bez haszowania lub wygaśnięcia, wywołań sieciowych poza ustalone w specyfikacji, ścieżek plików z danych użytkownika bez normalizacji, osłabienia CI albo testów (wyłączone kroki, `skip`), oraz zależności pobieranych bez przypięcia wersji.
+
 ## Wynik
 
 Napisz jedno zdanie uzasadnienia **bez cytowania danych osobowych i sekretów** (wskaż tylko plik i sekcję), a jako **ostatnią linię odpowiedzi** podaj werdykt: `pass` (żaden punkt nie zachodzi) albo `fail`.

@@ -1,4 +1,4 @@
-# Cezar workflow of the build of a new application (spec S5 one module, S8; stage 2).
+# Cezar workflow of the build of a new application (spec S5 one module, S7 E2E of the whole application, S8; stage 2).
 # bin/sw-build-start starts it as an AUTONOMOUS task in the application project once the
 # specification is merged (config/sw.json "stage" 2) with the text "Budowa aplikacji:
 # <control>#<nr>"; the project is then in sw-stan-architektura. sw-create-repo seeds the
@@ -22,6 +22,20 @@
 #    models from the Cezar run records, the SHA captured before the review, green
 #    check-runs of requiredChecks for that SHA.
 #
+# 5. Module (spec S6, S7; stage 2 has ONE module, so no dispatch): the project goes to
+#    sw-stan-implementacja (bin/sw-stan), sw-inzynier implements the module and writes a test
+#    for every "udostępnia" item and an E2E test for every scenario; commit, push and a draft
+#    PR follow. bin/sw-pokrycie-check modul verifies the "## Pokrycie" of the contract (a test
+#    file for every item); remarks start a fix round of the engineer (rounds-mod). Then the
+#    same pipeline as for the architecture: sw-recenzent, github.wait-ci, sw-bezpieczenstwo,
+#    sw-merge kod (rounds-mod and pause-security-mod).
+# 6. Tests of the whole application (S7): sw-stan-integracja, bin/sw-pokrycie-check e2e (every
+#    scenario of the specification named in a test of tests/e2e, none skipped), the real run of
+#    scripts/test-e2e.sh, sw-tester judging whether the tests check the criteria. A failure or
+#    a remark starts a fix round of the engineer (rounds-test); its fix goes through a NEW PR
+#    (review, CI, security, merge) and the tests run again. Only green E2E and the verdict
+#    "pass" move the project to sw-stan-przeglad. Exhausted rounds pause the project.
+#
 # Every ending without a merge ends the task with status success on purpose (cezar-push
 # alerts the owner for every failed task, and the spec allows no such messages). The
 # exceptions are the pauses (S11): exhausted fix rounds and a failed security review go
@@ -32,7 +46,7 @@
 
 version: 2
 name: sw-build
-description: Architekt przygotowuje architekturę z jednym modułem, szkielet i CI, niezależna recenzja, CI i przegląd bezpieczeństwa oceniają PR, a sw-merge kod go merguje bez udziału właściciela.
+description: Architekt przygotowuje architekturę z jednym modułem, inżynier go implementuje z testami, każdy PR przechodzi niezależną recenzję, CI i przegląd bezpieczeństwa oraz sw-merge kod, a tester sprawdza E2E pełnej aplikacji przed przejściem projektu w przegląd.
 
 nodes:
   - id: start
@@ -220,9 +234,302 @@ nodes:
     command: |
       bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa architektury: fail'
 
+  - id: state-impl
+    type: check
+    name: Stan projektu - implementacja
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-stan" architektura implementacja
+
+  - id: limits-engineer
+    type: check
+    name: Limity projektu (przed inżynierem)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: engineer
+    type: agent
+    name: Inżynier (moduł)
+    skill: sw-inzynier
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-inzynier i pracuj w trybie implementacja: pierwszy zapis modułu.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr checks *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+    verdicts: [gotowa]
+
+  - id: commit-mod
+    type: git.commit
+    name: Commit modułu
+    message: "feat: implementacja modułu i testy E2E aplikacji"
+
+  - id: push-mod
+    type: git.push
+    name: Push modułu
+
+  - id: pr-mod
+    type: github.draft-pr
+    name: PR modułu
+    title: "feat: implementacja modułu i testy E2E aplikacji"
+
+  - id: mod-check
+    type: check
+    name: Test dla każdej pozycji udostępnia
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-pokrycie-check" modul
+
+  - id: sha-mod
+    type: check
+    name: SHA ocenianej wersji modułu
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" sha
+
+  - id: limits-review-mod
+    type: check
+    name: Limity projektu (przed recenzją modułu)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: review-mod
+    type: agent
+    name: Recenzent (kod modułu)
+    skill: sw-recenzent
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-recenzent i zrecenzuj PR modułu w trybie kod (sekcja „PR modułu”).
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr diff *"
+      - "git diff *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+    verdicts: [approve, changes]
+
+  - id: ci-mod
+    type: github.wait-ci
+    name: CI commita modułu (check-runy requiredChecks)
+
+  - id: rounds-mod
+    type: loop
+    name: Rundy poprawek modułu
+    max: 3
+
+  - id: limits-fix-mod
+    type: check
+    name: Limity projektu (przed poprawką modułu)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: fix-mod
+    type: agent
+    name: Inżynier (poprawka po uwagach albo czerwonym CI)
+    skill: sw-inzynier
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-inzynier i pracuj w trybie poprawka: uwagi recenzenta, sprawdzenia pokrycia
+      albo czerwone CI (runda poprawek {{nodes.rounds-mod.iteration}} z {{nodes.rounds-mod.max}}).
+      Uwagi są w .ai/sw-run/uwagi.md. Gdy go nie ma, przyczyną jest czerwone CI: sprawdź je
+      poleceniem gh pr checks.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr checks *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+    verdicts: [gotowa]
+
+  - id: mod-check-fix
+    type: check
+    name: Test dla każdej pozycji udostępnia (po poprawce)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-pokrycie-check" modul
+
+  - id: commit-fix-mod
+    type: git.commit
+    name: Commit poprawek modułu
+    message: "fix: poprawki modułu po recenzji albo CI"
+
+  - id: push-fix-mod
+    type: git.push
+    name: Push poprawek modułu
+
+  - id: security-mod
+    type: agent
+    name: Bezpieczeństwo (kod modułu)
+    skill: sw-bezpieczenstwo
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-bezpieczenstwo i pracuj w trybie kod na PR modułu.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "git diff *"
+      - "ls"
+      - "ls *"
+    verdicts: [pass, fail]
+
+  - id: limits-merge-mod
+    type: check
+    name: Limity projektu (przed merge'em modułu)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: merge-mod
+    type: check
+    name: Merge modułu (sw-merge kod)
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" merge-kod '{{nodes.sha-mod.output}}' \
+        --werdykt "autor={{nodes.engineer.verdict}}@{{nodes.engineer.runId}}" \
+        --werdykt "recenzent={{nodes.review-mod.verdict}}@{{nodes.review-mod.runId}}" \
+        --werdykt "bezpieczenstwo={{nodes.security-mod.verdict}}@{{nodes.security-mod.runId}}"
+
+  - id: state-integ
+    type: check
+    name: Stan projektu - integracja
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-stan" implementacja integracja
+
+  - id: limits-test
+    type: check
+    name: Limity projektu (przed testami E2E)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: e2e-check
+    type: check
+    name: Test E2E dla każdego scenariusza specyfikacji
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-pokrycie-check" e2e
+
+  - id: e2e-run
+    type: check
+    name: Testy E2E pełnej aplikacji
+    command: |
+      mkdir -p .ai/sw-run
+      log="$(mktemp)"
+      timeout 1800 bash scripts/test-e2e.sh > "$log" 2>&1; rc=$?
+      tail -n 60 "$log"
+      if [ "$rc" -ne 0 ]; then
+        { echo "1. Testy E2E (scripts/test-e2e.sh) nie przechodzą, kod wyjścia $rc. Koniec wyjścia:"; tail -n 40 "$log" | sed 's/^/   /'; } > .ai/sw-run/uwagi.md
+      fi
+      rm -f "$log"
+      exit "$rc"
+
+  - id: limits-tester
+    type: check
+    name: Limity projektu (przed testerem)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: tester
+    type: agent
+    name: Tester (E2E pełnej aplikacji)
+    skill: sw-tester
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-tester i oceń testy E2E pełnej aplikacji po merge'u modułu.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Bash]
+    bashAllowlist:
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "bash scripts/*"
+    verdicts: [pass, fail]
+
+  - id: rounds-test
+    type: loop
+    name: Rundy poprawek po testach E2E
+    max: 3
+
+  - id: limits-fix-test
+    type: check
+    name: Limity projektu (przed poprawką po testach)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: fix-test
+    type: agent
+    name: Inżynier (poprawka po raporcie testów E2E)
+    skill: sw-inzynier
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-inzynier i pracuj w trybie poprawka: brakujące albo padające testy E2E
+      pełnej aplikacji (runda poprawek {{nodes.rounds-test.iteration}} z {{nodes.rounds-test.max}}).
+      Raport testów, testera albo sprawdzenia pokrycia jest w .ai/sw-run/uwagi.md.
+      Poprawka trafia do nowego PR, który przechodzi recenzję, CI i przegląd bezpieczeństwa.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr checks *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+    verdicts: [gotowa]
+
+  - id: state-review
+    type: check
+    name: Stan projektu - przegląd
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-stan" integracja przeglad
+
+  - id: pause-rounds-mod
+    type: check
+    name: Wstrzymanie projektu po wyczerpaniu rund poprawek modułu
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'moduł: uwagi albo czerwone CI po wyczerpaniu rund poprawek'
+
+  - id: pause-security-mod
+    type: check
+    name: Wstrzymanie projektu po porażce przeglądu bezpieczeństwa modułu
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa modułu: fail'
+
+  - id: pause-rounds-test
+    type: check
+    name: Wstrzymanie projektu po wyczerpaniu rund poprawek po testach E2E
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'testy E2E aplikacji: porażki albo brak pokrycia po wyczerpaniu rund poprawek'
+
   - id: done
     type: end
-    name: Architektura zmergowana
+    name: Moduł zmergowany, E2E zielone, projekt w przeglądzie
     status: success
 
   - id: stopped
@@ -279,9 +586,89 @@ edges:
   - { from: security.failed, to: stopped }
   - { from: limits-merge.pass, to: merge }
   - { from: limits-merge.fail, to: stopped }
-  - { from: merge.pass, to: done }
+  - { from: merge.pass, to: state-impl }
   - { from: merge.fail, to: stopped }
   - { from: pause-rounds.pass, to: stopped }
   - { from: pause-rounds.fail, to: stopped }
   - { from: pause-security.pass, to: stopped }
   - { from: pause-security.fail, to: stopped }
+
+  - { from: state-impl.pass, to: limits-engineer }
+  - { from: state-impl.fail, to: stopped }
+  - { from: limits-engineer.pass, to: engineer }
+  - { from: limits-engineer.fail, to: stopped }
+  - { from: engineer.gotowa, to: commit-mod }
+  - { from: engineer.failed, to: stopped }
+  - { from: commit-mod.done, to: push-mod }
+  - { from: commit-mod.nothing, to: stopped }
+  - { from: commit-mod.failed, to: stopped }
+  - { from: push-mod.done, to: pr-mod }
+  - { from: push-mod.failed, to: stopped }
+  - { from: pr-mod.created, to: mod-check }
+  - { from: pr-mod.failed, to: stopped }
+  - { from: mod-check.pass, to: sha-mod }
+  - { from: mod-check.fail, to: rounds-mod }
+
+  - { from: sha-mod.pass, to: limits-review-mod }
+  - { from: sha-mod.fail, to: stopped }
+  - { from: limits-review-mod.pass, to: review-mod }
+  - { from: limits-review-mod.fail, to: stopped }
+  - { from: review-mod.approve, to: ci-mod }
+  - { from: review-mod.changes, to: rounds-mod }
+  - { from: review-mod.failed, to: stopped }
+  - { from: ci-mod.green, to: security-mod }
+  - { from: ci-mod.red, to: rounds-mod }
+  - { from: ci-mod.timeout, to: stopped }
+  - { from: ci-mod.failed, to: stopped }
+
+  - { from: rounds-mod.repeat, to: limits-fix-mod }
+  - { from: rounds-mod.exhausted, to: pause-rounds-mod }
+  - { from: limits-fix-mod.pass, to: fix-mod }
+  - { from: limits-fix-mod.fail, to: stopped }
+  - { from: fix-mod.gotowa, to: mod-check-fix }
+  - { from: fix-mod.failed, to: stopped }
+  - { from: mod-check-fix.pass, to: commit-fix-mod }
+  - { from: mod-check-fix.fail, to: rounds-mod }
+  - { from: commit-fix-mod.done, to: push-fix-mod }
+  - { from: commit-fix-mod.nothing, to: stopped }
+  - { from: commit-fix-mod.failed, to: stopped }
+  - { from: push-fix-mod.done, to: sha-mod }
+  - { from: push-fix-mod.failed, to: stopped }
+
+  - { from: security-mod.pass, to: limits-merge-mod }
+  - { from: security-mod.fail, to: pause-security-mod }
+  - { from: security-mod.failed, to: stopped }
+  - { from: limits-merge-mod.pass, to: merge-mod }
+  - { from: limits-merge-mod.fail, to: stopped }
+  - { from: merge-mod.pass, to: state-integ }
+  - { from: merge-mod.fail, to: stopped }
+
+  - { from: state-integ.pass, to: limits-test }
+  - { from: state-integ.fail, to: stopped }
+  - { from: limits-test.pass, to: e2e-check }
+  - { from: limits-test.fail, to: stopped }
+  - { from: e2e-check.pass, to: e2e-run }
+  - { from: e2e-check.fail, to: rounds-test }
+  - { from: e2e-run.pass, to: limits-tester }
+  - { from: e2e-run.fail, to: rounds-test }
+  - { from: limits-tester.pass, to: tester }
+  - { from: limits-tester.fail, to: stopped }
+  - { from: tester.pass, to: state-review }
+  - { from: tester.fail, to: rounds-test }
+  - { from: tester.failed, to: stopped }
+  - { from: state-review.pass, to: done }
+  - { from: state-review.fail, to: stopped }
+
+  - { from: rounds-test.repeat, to: limits-fix-test }
+  - { from: rounds-test.exhausted, to: pause-rounds-test }
+  - { from: limits-fix-test.pass, to: fix-test }
+  - { from: limits-fix-test.fail, to: stopped }
+  - { from: fix-test.gotowa, to: commit-mod }
+  - { from: fix-test.failed, to: stopped }
+
+  - { from: pause-rounds-mod.pass, to: stopped }
+  - { from: pause-rounds-mod.fail, to: stopped }
+  - { from: pause-security-mod.pass, to: stopped }
+  - { from: pause-security-mod.fail, to: stopped }
+  - { from: pause-rounds-test.pass, to: stopped }
+  - { from: pause-rounds-test.fail, to: stopped }

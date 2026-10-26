@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# sw-pokrycie-check modul|e2e — checks the implementation in the working directory (spec S6, S7):
+#   modul  every "udostępnia" item of the module contract has a test (section "## Pokrycie");
+#   e2e    every scenario of the specification has an E2E test in tests/e2e, none skipped.
+# The sw-build workflow runs it after the engineer, so those criteria do not rest on the agent
+# alone. On problems they are written to .ai/sw-run/uwagi.md (the fix round of the engineer
+# reads them) and printed after STAN: BLAD; exit 1. Without problems: WYNIK: OK, exit 0.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require python3
+
+case "${1:-}" in modul | e2e) ;; *) sw_die "uzycie: sw-pokrycie-check modul|e2e" ;; esac
+problems="$(python3 "$here/lib/sw_pokrycie.py" "$1" .)" || { echo "STAN: BLAD blad modulu sprawdzania pokrycia"; exit 1; }
+if [ -z "$problems" ]; then
+  echo "WYNIK: OK"
+  exit 0
+fi
+mkdir -p .ai/sw-run
+awk '{print NR ". " $0}' <<<"$problems" > .ai/sw-run/uwagi.md
+echo "STAN: BLAD pokrycie niekompletne ($1)"
+printf '%s\n' "$problems"
+exit 1
