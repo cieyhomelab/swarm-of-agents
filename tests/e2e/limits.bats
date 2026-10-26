@@ -101,6 +101,7 @@ app_runs() { state | jq -c '[.runs[] | select(.project == "proj-app")]'; }
   runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T08:00:00Z","task":"Zrob X"}]'
   "$bin/sw-gate" >/dev/null
   [[ "$(app_runs | jq -r '.[1].task')" == *"[ponowienie 1; zastępuje a]" ]]
+  [ "$(app_runs | jq -r '.[0].status')" = cancelled ]
   runs '[{"id":"c","status":"failed","step":"testy","task":"Zrob X\n\n[ponowienie 2; zastępuje b]"}]'
   run "$bin/sw-gate"
   [[ "$output" == *"URUCHOM: GENERATOR"* ]]
