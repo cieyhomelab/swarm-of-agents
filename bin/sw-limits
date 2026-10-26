@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# sw-limits <nr> — checks the time and usage limits of the project of idea issue <nr>
+# (spec S12) and pauses it through sw-pause when one is exceeded.
+#   - time: "approvedAt" from the issue metadata + "projectTimeLimitHours" (config);
+#   - usage: sum of "costUsd" of the tasks of the project's Cezar project ("projectId"
+#     in the metadata, GET /api/v1/p/{id}/runs) against "projectUsageLimitUsd".
+# Only an active project is checked (open, "sw-zatwierdzony" or a "sw-stan-*" label other
+# than "sw-stan-wdrozony" / "sw-stan-wstrzymany"). SW_NOW (ISO) overrides the clock in tests.
+# Output: WYNIK: OK | WYNIK: WSTRZYMANY <powód> | WYNIK: POMINIETO <powód>;
+# STAN: BLAD <powód> with exit 1 when GitHub or Cezar cannot be read or the pause failed.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq curl python3
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[[ $# -eq 1 && "${1:-}" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-limits <nr>"
+number="$1"
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+time_limit="$(jq -er '.projectTimeLimitHours // 168' "$SW_CONFIG")" || fail "niepoprawny projectTimeLimitHours"
+usage_limit="$(jq -er '.projectUsageLimitUsd // 150' "$SW_CONFIG")" || fail "niepoprawny projectUsageLimitUsd"
+
+issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
+if ! printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
+    and any(.labels[]?; .name == "sw-zatwierdzony" or (.name | startswith("sw-stan-")))
+    and (any(.labels[]?; .name == "sw-stan-wstrzymany" or .name == "sw-stan-wdrozony") | not)' >/dev/null; then
+  echo "WYNIK: POMINIETO issue $number nie jest aktywnym projektem"
+  exit 0
+fi
+meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
+  | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
+  || fail "niepoprawne metadane issue $number"
+approved="$(jq -r '.approvedAt // "-"' <<<"$meta")"
+project_id="$(jq -r '.projectId // empty' <<<"$meta")"
+
+usage=0
+if [ -n "$project_id" ]; then
+  [[ "$project_id" =~ ^[A-Za-z0-9._-]+$ ]] || fail "niepoprawny projectId w metadanych issue $number"
+  runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
+    || fail "nie mozna odczytac zadan projektu $project_id"
+  usage="$(printf '%s' "$runs" | jq -er '(if type == "array" then . else (.runs // []) end)
+    | map(.costUsd // 0 | numbers) | add // 0')" || fail "niepoprawna lista zadan projektu $project_id"
+fi
+
+now="${SW_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+reason="$(python3 "$here/lib/sw_limits.py" "$approved" "$now" "$time_limit" "$usage" "$usage_limit")" \
+  || fail "nie mozna sprawdzic limitow projektu $number"
+if [ -z "$reason" ]; then
+  echo "WYNIK: OK"
+  exit 0
+fi
+
+out="$("$here/sw-pause" "$number" "$reason")" || { printf '%s\n' "$out"; exit 1; }
+case "$out" in
+  "WYNIK: WSTRZYMANY") echo "WYNIK: WSTRZYMANY $reason" ;;
+  *) printf '%s\n' "$out" ;;
+esac
