@@ -4,7 +4,14 @@
 Routes:
   GET  /api/v1/health             Cezar health (healthResponseSchema subset)
   GET  /api/v1/workspace/config   Cezar workspace config (resources.maxParallel)
-  POST /api/v1/projects/create    Cezar project + private repository {name, github:{owner}}
+  POST /api/v1/projects/create    Cezar project + private repository {name, github:{owner}}; a name in state
+                                  "create_fail" ({name: 409|500}) fails with that status, a name already in
+                                  state "projects" or "repos" gives 409; registers the repository in "repos"
+  POST /api/v1/projects/checkout  register an existing repository {url} as a Cezar project (state "projects")
+  PATCH /api/v1/projects/<id>     {maxParallel}: stored on the project in state "projects"
+  GET  /github/repos/<o>/<r>[/contents/<path>]   other repositories, state "repos" ("o/r" -> {private, topics,
+                                  files: {path: {sha, content}}}); PUT /contents/<path> creates a file (201;
+                                  409 when it exists without its sha), PUT /topics {names} replaces the topics
   GET  /cez/p/<project>/automations           automations of one project (what `cez automation list` reads)
   POST /cez/p/<project>/automations[/<id>]    create / update an automation definition in that project
   GET  /github/<path>             GitHub REST, from the in-memory state
@@ -28,7 +35,7 @@ Routes:
 
 State keys: health_status, github_user (null = logged out), control_repo,
 control_private (null = repository missing), max_parallel, labels, issues,
-histories, contents, repo_files (other repositories: "owner/name/path" entries), runs, automations (starts with automations of another agent chain, which
+histories, contents, repos, projects, create_fail, repo_files (other repositories: "owner/name/path" entries), runs, automations (starts with automations of another agent chain, which
 must stay untouched).
 
 Usage: mock_api.py [--port N] [--port-file FILE]   (port 0 = random)
@@ -55,6 +62,9 @@ DEFAULTS = {
     "pulls": {},
     "repo_files": [],
     "runs": [],
+    "repos": {},
+    "projects": [],
+    "create_fail": {},
     "histories": {},
     "comments": {},
     "push_token": "test-token",
@@ -88,6 +98,7 @@ class Handler(BaseHTTPRequestHandler):
             projects = [{"id": "swarm-of-agents", "name": "swarm-of-agents"}]
             if STATE["control_private"] is not None and not STATE["hide_project"]:
                 projects.append({"id": "proj-sw-control", "name": STATE["control_repo"].split("/")[1]})
+            projects += [{"id": p["id"], "name": p["name"]} for p in STATE["projects"]]
             return self._send(200, {"version": "0.0.0-mock", "projects": projects, "bootProject": "mock"})
         if self.path == "/api/v1/workspace/config":
             return self._send(200, {"resources": {"maxParallel": STATE["max_parallel"]}})
@@ -121,6 +132,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, runs)
             found = [r for r in runs if r["id"] == run[2]]
             return self._send(200, found[0]) if found else self._send(404, {"message": "Not Found"})
+        other = re.fullmatch(r"/github/repos/([^/]+/[^/]+)(?:/contents/(.+))?", self.path)
+        if other and other[1] in STATE["repos"]:
+            repo = STATE["repos"][other[1]]
+            if other[2] is None:
+                return self._send(200, {"full_name": other[1], "private": repo["private"], "topics": repo["topics"]})
+            entry = repo["files"].get(other[2])
+            if entry is None:
+                return self._send(404, {"message": "Not Found"})
+            return self._send(200, {"sha": entry["sha"], "content": entry["content"]})
         github_file = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/contents/(.+)", self.path)
         if github_file and f"{github_file[1]}/{github_file[2]}" in STATE["repo_files"]:
             return self._send(200, {"sha": "sha0", "content": ""})
@@ -166,8 +186,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, STATE)
         if self.path == "/api/v1/projects/create":
             body = json.loads(raw)
-            STATE["control_private"] = True
+            full = f"{body.get('github', {}).get('owner', '')}/{body['name']}"
+            failure = STATE["create_fail"].get(body["name"])
+            if failure:
+                return self._send(failure, {"error": "folder_exists" if failure == 409 else "github_create"})
+            if full != STATE["control_repo"]:
+                if full in STATE["repos"] or any(p["name"] == body["name"] for p in STATE["projects"]):
+                    return self._send(409, {"error": "folder_exists"})
+                STATE["repos"][full] = {"private": True, "topics": [], "files": {}}
+                STATE["projects"].append({"id": "proj-" + body["name"], "name": body["name"]})
+            else:
+                STATE["control_private"] = True
             return self._send(200, {"id": "proj-" + body["name"], "name": body["name"]})
+        if self.path == "/api/v1/projects/checkout":
+            name = json.loads(raw)["url"].rstrip("/").split("/")[-1]
+            project = {"id": "proj-" + name, "name": name}
+            STATE["projects"].append(project)
+            return self._send(200, project)
         if self.path == "/m/push/gate":
             return self._push_gate(raw)
         started = re.fullmatch(r"/api/v1/p/([^/]+)/runs", self.path)
@@ -237,6 +272,13 @@ class Handler(BaseHTTPRequestHandler):
             if "state" in update:
                 found[0]["state"] = update["state"]
             return self._send(200, found[0])
+        project = re.fullmatch(r"/api/v1/projects/([^/]+)", self.path)
+        if project:
+            found = [p for p in STATE["projects"] if p["id"] == project[1]]
+            if not found:
+                return self._send(404, {"message": "Not Found"})
+            found[0]["maxParallel"] = json.loads(raw or b"{}").get("maxParallel")
+            return self._send(200, found[0])
         pull = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls/(\d+)", self.path)
         item = STATE["pulls"].get(f"{pull[1]}#{pull[2]}") if pull else None
         if item is None:
@@ -257,6 +299,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, {"message": "Head branch was modified"})
             item["merged"] = True
             return self._send(200, {"merged": True})
+        other = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/(?:contents/(.+)|topics)", self.path)
+        if other and other[1] in STATE["repos"]:
+            repo = STATE["repos"][other[1]]
+            body = json.loads(raw or b"{}")
+            if other[2] is None:
+                repo["topics"] = body["names"]
+                return self._send(200, {"names": repo["topics"]})
+            current = repo["files"].get(other[2])
+            if current is not None and body.get("sha") != current["sha"]:
+                return self._send(409, {"message": "sha mismatch"})
+            base64.b64decode(body["content"])
+            sha = f"sha{len(REQUESTS)}"
+            repo["files"][other[2]] = {"sha": sha, "content": body["content"]}
+            return self._send(201, {"content": {"sha": sha}})
         repo_prefix = f"/github/repos/{STATE['control_repo']}/contents/"
         if self.path.startswith(repo_prefix) and STATE["control_private"] is not None:
             path = self.path[len(repo_prefix):]
