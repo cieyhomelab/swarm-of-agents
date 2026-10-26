@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sw-stan <z> <do> — moves the project of the build task from state <z> to <do> (spec "Projekt —
 # etykiety na issue pomysłu"): the states are the suffixes of the "sw-stan-*" labels
-# (architektura, implementacja, integracja, przeglad). ONE PATCH from a fresh read replaces
+# (architektura, implementacja, integracja, przeglad, wdrazanie; "wdrozony" sets sw-wdrozony). ONE PATCH from a fresh read replaces
 # "sw-stan-<z>" with "sw-stan-<do>" and the sw-build workflow calls it at the transitions.
 # Only the forward step to the next state is allowed. The idea comes from the README of the
 # checkout in the working directory (sw-create-repo seeds it with the link).
@@ -20,7 +20,7 @@ fail() { echo "STAN: BLAD $*"; exit 1; }
 
 [ $# -eq 2 ] || sw_die "uzycie: sw-stan <z> <do>"
 from="$1" to="$2"
-order=(architektura implementacja integracja przeglad)
+order=(architektura implementacja integracja przeglad wdrazanie)
 idx() { local i; for i in "${!order[@]}"; do [ "${order[$i]}" = "$1" ] && { echo "$i"; return 0; }; done; return 1; }
 fi="$(idx "$from")" || sw_die "nieznany stan: $from"
 ti="$(idx "$to")" || sw_die "nieznany stan: $to"

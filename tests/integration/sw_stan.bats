@@ -58,3 +58,14 @@ idea() {
   [[ "$output" == *"STAN: BLAD"* ]]
   [ "$(labels)" = '["sw-pomysl","sw-stan-architektura"]' ]
 }
+
+@test "S10 przeglad moves to wdrazanie, the only further step; wdrozony is not set by sw-stan" {
+  idea '[{"name":"sw-pomysl"},{"name":"sw-stan-przeglad"}]'
+  run "$ROOT/bin/sw-stan" przeglad wdrazanie
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "WYNIK: STAN wdrazanie" ]
+  [ "$(labels)" = '["sw-pomysl","sw-stan-wdrazanie"]' ]
+  run "$ROOT/bin/sw-stan" wdrazanie wdrozony
+  [ "$status" -ne 0 ]
+  [ "$(labels)" = '["sw-pomysl","sw-stan-wdrazanie"]' ]
+}

@@ -324,8 +324,8 @@ assert ("app-check.fail", "rounds-app") in edges and ("rounds-app.repeat", "limi
 assert ("fix-app.gotowa", "commit-mod") in edges and ("rounds-app.exhausted", "pause-rounds-app") in edges
 # the report is committed and goes through the review, CI, security and merge of the module PR; only then the task ends
 assert ("app-check.pass", "once-report") in edges and ("commit-report.done", "push-mod") in edges
-assert ("merge-mod.pass", "report-merged") in edges and ("report-merged.pass", "done") in edges
-assert ("state-review.pass", "done") not in edges
+assert ("merge-mod.pass", "report-merged") in edges and ("report-merged.pass", "state-deploy") in edges
+assert ("state-review.pass", "done") not in edges and ("report-merged.pass", "done") not in edges
 print("ok")
 PY
   [ "$status" -eq 0 ]
@@ -336,4 +336,29 @@ PY
   for s in '## Tryb aplikacja' 'kategorii wykluczonych' 'sekretów' 'uwierzytelnienia' 'Jedno konto właściciela' '.ai/sw-run/przeglad.json' 'docs/security/<data>-raport.md'; do
     grep -qF -- "$s" "$f" || { echo "missing: $s"; return 1; }
   done
+}
+
+@test "S10 the deployment: wdrazanie, limits, sw-deploy, retries equal retriesPerTask, wdrozony only after a deployment, pause when exhausted" {
+  run python3 - "$WF" "$ROOT/config/sw.json" <<'PY'
+import json, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+cfg = json.load(open(sys.argv[2]))
+nodes = {n["id"]: n for n in doc["nodes"]}
+edges = {(e["from"], e["to"]) for e in doc["edges"]}
+assert nodes["rounds-deploy"]["max"] == cfg["retriesPerTask"]
+assert "bin/sw-stan\" przeglad wdrazanie" in nodes["state-deploy"]["command"]
+assert "bin/sw-limits" in nodes["limits-deploy"]["command"]
+assert "bin/sw-deploy" in nodes["deploy"]["command"] and "bin/sw-wdrozony" in nodes["finish"]["command"]
+# the order: the merged report, the state, the limits, the deployment, then the state "wdrozony" and the end
+for a, b in [("state-deploy.pass", "limits-deploy"), ("limits-deploy.pass", "deploy"), ("deploy.pass", "finish"), ("finish.pass", "done")]:
+    assert (a, b) in edges, (a, b)
+# only a deployment leads to "done"
+assert {e["from"] for e in doc["edges"] if e["to"] == "done"} == {"finish.pass"}
+# a failure retries; exhausted retries pause the project
+assert ("deploy.fail", "rounds-deploy") in edges and ("finish.fail", "rounds-deploy") in edges
+assert ("rounds-deploy.repeat", "limits-deploy") in edges and ("rounds-deploy.exhausted", "pause-deploy") in edges
+assert "sw-spec-pr\" pause" in nodes["pause-deploy"]["command"]
+print("ok")
+PY
+  [ "$status" -eq 0 ]
 }

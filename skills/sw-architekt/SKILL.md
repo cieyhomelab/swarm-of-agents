@@ -16,7 +16,7 @@ Działasz na modelu `architect`, w węźle `agent` workflowu `sw-build`, jako za
 
 ## Kroki
 
-1. **Stos.** Wybierz najprostszy stos, który spełnia specyfikację. Aplikacja uruchamia się w kontenerze na VPS z Dockerem, więc szkielet ma `Dockerfile` i sposób uruchomienia jednym poleceniem. Dane tylko właściciela, dostęp po uwierzytelnieniu, dane syntetyczne w testach. Decyzję i uzasadnienie dopisz do specyfikacji w sekcji `## Architektura` (stos, uruchomienie, dane, uwierzytelnienie).
+1. **Stos.** Wybierz najprostszy stos, który spełnia specyfikację. Aplikacja uruchamia się w kontenerze na VPS z Dockerem, więc szkielet ma `Dockerfile` w katalogu głównym (z linią `EXPOSE <port>`; aplikacja słucha HTTP na tym porcie, a bez `EXPOSE` wdrożenie przyjmie 8080) i sposób uruchomienia jednym poleceniem. Przed aplikacją wdrożenie stawia własne logowanie właściciela, ale aplikacja nadal wymaga uwierzytelnienia (S9, punkt 3). Dane tylko właściciela, dostęp po uwierzytelnieniu, dane syntetyczne w testach. Decyzję i uzasadnienie dopisz do specyfikacji w sekcji `## Architektura` (stos, uruchomienie, dane, uwierzytelnienie).
 2. **Moduł.** Podziel aplikację na dokładnie jeden moduł. Zapisz jego kontrakt w `docs/kontrakty/<modul>.md` (nazwa modułu w kebab-case) z sekcjami w tej kolejności:
    - `## Udostępnia`: lista pozycji (punkt wejścia, ekran, funkcja), z których każda da się sprawdzić testem;
    - `## Wymaga`: czego moduł potrzebuje z zewnątrz (dla jednego modułu zwykle „brak”);
