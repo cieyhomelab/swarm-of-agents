@@ -108,3 +108,52 @@ state() { curl -fsS -X POST -d '{}' "$SW_CEZAR_URL/__control"; }
   [ "$status" -eq 1 ]
   [[ "$output" == *"STAN: BLAD"*"nie jest zarejestrowany"* ]]
 }
+
+# make_checkout — bare "origin" plus Cezar's checkout of it, registered in the mock.
+make_checkout() {
+  g() { git -c user.name=t -c user.email=t@example.invalid -c init.defaultBranch=main "$@"; }
+  g init -q --bare "$WORK/origin.git"
+  g clone -q "$WORK/origin.git" "$WORK/checkout" 2>/dev/null
+  g -C "$WORK/checkout" commit -q --allow-empty -m init
+  g -C "$WORK/checkout" push -q origin HEAD:main
+  g clone -q "$WORK/origin.git" "$WORK/other"
+  control "{\"project_roots\": {\"proj-sw-control\": \"$WORK/checkout\"}}"
+}
+
+@test "Cezar's checkout of sw-control is fast-forwarded to the pushed workflows" {
+  make_checkout
+  g -C "$WORK/other" commit -q --allow-empty -m "sw-start: workflow"
+  g -C "$WORK/other" push -q origin HEAD:main
+  run "$ROOT/bin/sw-start"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "STAN: OK" ]
+  [[ "$output" == *"zaktualizowano kopie $WORK/checkout"* ]]
+  [ "$(git -C "$WORK/checkout" rev-parse HEAD)" = "$(git -C "$WORK/origin.git" rev-parse main)" ]
+}
+
+@test "up-to-date checkout is left as it is and reported as nothing" {
+  make_checkout
+  head="$(git -C "$WORK/checkout" rev-parse HEAD)"
+  run "$ROOT/bin/sw-start"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"zaktualizowano kopie"* ]]
+  [ "$(git -C "$WORK/checkout" rev-parse HEAD)" = "$head" ]
+}
+
+@test "diverged checkout stops the setup instead of merging" {
+  make_checkout
+  g -C "$WORK/other" commit -q --allow-empty -m remote
+  g -C "$WORK/other" push -q origin HEAD:main
+  g -C "$WORK/checkout" commit -q --allow-empty -m local
+  local_head="$(git -C "$WORK/checkout" rev-parse HEAD)"
+  run "$ROOT/bin/sw-start"
+  [ "$status" -eq 1 ]
+  [[ "${lines[-1]}" == "STAN: BLAD nie mozna zaktualizowac $WORK/checkout"* ]]
+  [ "$(git -C "$WORK/checkout" rev-parse HEAD)" = "$local_head" ]
+}
+
+@test "unknown checkout directory only warns" {
+  run "$ROOT/bin/sw-start"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UWAGA: Cezar nie podal katalogu projektu sw-control"* ]]
+}

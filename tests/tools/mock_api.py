@@ -3,6 +3,7 @@
 
 Routes:
   GET  /api/v1/health             Cezar health (healthResponseSchema subset)
+  GET  /api/v1/projects           Cezar projects with their local checkout "root" (state "project_roots": {id: path})
   GET  /api/v1/workspace/config   Cezar workspace config (resources.maxParallel)
   POST /api/v1/projects/create    Cezar project + private repository {name, github:{owner}}; a name in state
                                   "create_fail" ({name: 409|500}) fails with that status, a name already in
@@ -49,7 +50,7 @@ Routes:
 
 State keys: health_status, github_user (null = logged out), control_repo,
 control_private (null = repository missing), max_parallel, labels, issues,
-histories, contents, repos, projects, create_fail, repo_files (other repositories: "owner/name/path" entries), runs, automations (starts with automations of another agent chain, which
+histories, contents, repos, projects, project_roots, create_fail, repo_files (other repositories: "owner/name/path" entries), runs, automations (starts with automations of another agent chain, which
 must stay untouched).
 
 Usage: mock_api.py [--port N] [--port-file FILE]   (port 0 = random)
@@ -82,6 +83,7 @@ DEFAULTS = {
     "runs": [],
     "repos": {},
     "projects": [],
+    "project_roots": {},
     "create_fail": {},
     "repo_fail": {},
     "cancel_fail": None,
@@ -122,6 +124,14 @@ class Handler(BaseHTTPRequestHandler):
                 projects.append({"id": "proj-sw-control", "name": STATE["control_repo"].split("/")[1]})
             projects += [{"id": p["id"], "name": p["name"]} for p in STATE["projects"]]
             return self._send(200, {"version": "0.0.0-mock", "projects": projects, "bootProject": "mock"})
+        if self.path == "/api/v1/projects":
+            projects = [{"id": "swarm-of-agents", "name": "swarm-of-agents"}]
+            if STATE["control_private"] is not None and not STATE["hide_project"]:
+                projects.append({"id": "proj-sw-control", "name": STATE["control_repo"].split("/")[1]})
+            projects += [{"id": p["id"], "name": p["name"]} for p in STATE["projects"]]
+            for p in projects:
+                p["root"] = STATE["project_roots"].get(p["id"])
+            return self._send(200, {"projects": projects, "bootProject": "mock"})
         if self.path == "/api/v1/workspace/config":
             return self._send(200, {"resources": {"maxParallel": STATE["max_parallel"]}})
         listing = re.fullmatch(r"/github/repos/([^/]+/[^/]+)/pulls\?(.*)", self.path)
