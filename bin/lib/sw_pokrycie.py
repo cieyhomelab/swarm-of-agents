@@ -16,14 +16,19 @@ import sys
 
 # Constructs that skip a test, not the bare words (a domain may use "pending" in an assertion or a name):
 # bats `skip` as a command, `test.skip(` / `it.skip(` / `describe.skip(`, `xit(` / `xdescribe(` / `xtest(`,
-# pytest `@pytest.mark.skip|xfail` and `pytest.skip(` / `pytest.xfail(`, `@unittest.skip`, `it.todo(`, `pending(`.
+# pytest `@pytest.mark.skip|xfail` and `pytest.skip(` / `pytest.xfail(`, `@unittest.skip`, `self.skipTest(`, `pytest.importorskip(`, `it.todo(`, `pending(`,
+# Mocha `this.skip(`, Go `t.Skip(` / `t.Skipf(` / `t.SkipNow(`, Jest `it.skip.each(...)(`.
 SKIPPED = re.compile(
     r"^\s*skip(\s|$)"
-    r"|\b(test|it|describe)\.(skip|todo|fixme)\s*\("
+    r"|\b(test|it|describe)\.(skip|todo|fixme)\s*[.(]"
     r"|(^|[^\w.\"'])(xit|xdescribe|xtest|pending)\s*\("
     r"|@pytest\.mark\.(skip|skipif|xfail)\b"
     r"|\bpytest\.(skip|xfail)\s*\("
     r"|@unittest\.skip"
+    r"|\b(self|cls)\.skipTest\s*\("
+    r"|\bthis\.skip\s*\("
+    r"|\b(t|b|tb|f)\.(Skip|Skipf|SkipNow)\s*\("
+    r"|\bpytest\.importorskip\s*\("
 )
 
 
