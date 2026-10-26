@@ -54,6 +54,7 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 ## Konfiguracja `config/sw.json`
 | Pole | Domyślnie | Znaczenie (specyfikacja) |
 |------|-----------|--------------------------|
+| `stage` | 1 | przełącznik etapu po zmergowanej specyfikacji (`bin/sw-build-start`): 1 przekazuje projekt łańcuchowi sh-* (`sw-handover-sh`), 2 uruchamia workflow `sw-build` i ustawia `sw-stan-architektura`; brak pola = 1 |
 | `cycleHours` | 1 | interwał cyklu; automatyzacja „sw: przegląd co godzinę” |
 | `maxParallelAgents` | 3 | limit równoległych agentów projektu → `maxParallel` projektu w Cezarze (S6) |
 | `projectTimeLimitHours` | 168 | limit czasu projektu od zatwierdzenia pomysłu (S12) |

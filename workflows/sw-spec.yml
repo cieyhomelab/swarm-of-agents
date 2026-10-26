@@ -14,8 +14,10 @@
 #    sw-merge spec (verdicts and run ids from node outputs, models from the Cezar run
 #    records, the SHA captured before the review) and sw-notify spec (the owner gets the
 #    PR link). A push after the verdicts changes the head and blocks the merge.
-# 6. bin/sw-handover-sh (stage 1 only) hands the merged project over to the other agent
-#    chain, closes the idea with "sw-spec-gotowa"; stage 2 replaces it with sw-build.
+# 6. bin/sw-build-start follows the stage switch ("stage" in config/sw.json, default 1):
+#    stage 1 runs bin/sw-handover-sh, which hands the merged project over to the other
+#    agent chain and closes the idea with "sw-spec-gotowa"; stage 2 starts the sw-build
+#    workflow instead and the project goes to sw-stan-architektura.
 #
 # Every ending without a merge (remarks left after the last round, failed security
 # review, unmet merge conditions, a failed agent) ends the task with status success on
@@ -180,8 +182,8 @@ nodes:
 
   - id: handover
     type: check
-    name: Przekazanie projektu (etap 1)
-    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-handover-sh"
+    name: Przekazanie projektu (etap 1) albo start sw-build (etap 2)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-build-start"
 
   - id: pause-rounds
     type: check

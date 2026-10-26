@@ -115,9 +115,9 @@ assert ("review.zatwierdzona", "security") in edges and ("review.uwagi", "rounds
 assert ("rounds.exhausted", "pause-rounds") in edges and ("pause-rounds.pass", "stopped") in edges
 assert ("security.pass", "pr-body") in edges and ("pr-body.pass", "merge") in edges
 assert ("merge.pass", "notify") in edges and ("security.fail", "pause-security") in edges and ("pause-security.pass", "stopped") in edges
-# stage 1 ends with the handover, reached only after the merge and its notification
+# the last step is the stage switch (handover in stage 1, sw-build in stage 2), reached only after the merge and its notification
 assert ("notify.pass", "handover") in edges and ("handover.pass", "done") in edges and ("handover.fail", "done") in edges
-assert "sw-handover-sh" in nodes["handover"]["command"]
+assert "sw-build-start" in nodes["handover"]["command"]
 # the merge gets every verdict and run id from node outputs, never from comments
 cmd = nodes["merge"]["command"]
 for role, node in (("autor", "analyst"), ("recenzent", "review"), ("bezpieczenstwo", "security")):

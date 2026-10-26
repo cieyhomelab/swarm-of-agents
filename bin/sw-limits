@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# sw-limits <nr> — checks the time and usage limits of the project of idea issue <nr>
+# sw-limits [<nr>] — checks the time and usage limits of the project of idea issue <nr>
 # (spec S12) and pauses it through sw-pause when one is exceeded.
 #   - time: "approvedAt" from the issue metadata + "projectTimeLimitHours" (config);
 #   - usage: sum of "costUsd" of the tasks of the project's Cezar project ("projectId"
 #     in the metadata, GET /api/v1/p/{id}/runs) against "projectUsageLimitUsd".
+# Without <nr> the idea is read from the README of the checkout in the working directory
+# (sw-create-repo seeds it), so the sw-build workflow calls it without arguments.
 # Only an active project is checked (open, "sw-zatwierdzony" or a "sw-stan-*" label other
 # than "sw-stan-wdrozony" / "sw-stan-wstrzymany"). SW_NOW (ISO) overrides the clock in tests.
 # Output: WYNIK: OK | WYNIK: WSTRZYMANY <powód> | WYNIK: POMINIETO <powód>;
@@ -17,10 +19,16 @@ sw_require gh jq curl python3
 
 fail() { echo "STAN: BLAD $*"; exit 1; }
 
-[[ $# -eq 1 && "${1:-}" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-limits <nr>"
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
+if [ $# -eq 0 ]; then
+  [ -r README.md ] || fail "brak numeru pomyslu i README.md z linkiem"
+  link="$(grep -oE "https://github\.com/${control//./\\.}/issues/[0-9]+" README.md | head -1)" || true
+  [ -n "$link" ] || fail "README.md nie ma linku do pomyslu w $control"
+  set -- "${link##*/}"
+fi
+[[ $# -eq 1 && "${1:-}" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-limits [<nr>]"
 number="$1"
 
-control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || fail "brak controlRepo w konfiguracji"
 time_limit="$(jq -er '.projectTimeLimitHours // 168' "$SW_CONFIG")" || fail "niepoprawny projectTimeLimitHours"
 usage_limit="$(jq -er '.projectUsageLimitUsd // 150' "$SW_CONFIG")" || fail "niepoprawny projectUsageLimitUsd"
 
