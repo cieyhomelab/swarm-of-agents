@@ -36,6 +36,15 @@
 #    (review, CI, security, merge) and the tests run again. Only green E2E and the verdict
 #    "pass" move the project to sw-stan-przeglad. Exhausted rounds pause the project.
 #
+# 7. Security review of the whole application (S9): after sw-stan-przeglad, sw-bezpieczenstwo
+#    (mode aplikacja) judges four points and writes them to .ai/sw-run/przeglad.json;
+#    bin/sw-przeglad decides (the verdict AND all four points, secrets also scanned by the
+#    script) and on "pass" writes docs/security/<date>-raport.md. The report goes through a PR
+#    of the module pipeline (review, CI, security, merge); the merged report ends the task,
+#    so nothing is deployed before it (step 5b). On "fail" a fix round of the engineer
+#    (rounds-app) starts: its fix goes through a NEW PR, the tests and the review run again.
+#    Exhausted rounds pause the project.
+#
 # Every ending without a merge ends the task with status success on purpose (cezar-push
 # alerts the owner for every failed task, and the spec allows no such messages). The
 # exceptions are the pauses (S11): exhausted fix rounds and a failed security review go
@@ -509,6 +518,100 @@ nodes:
     name: Stan projektu - przegląd
     command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-stan" integracja przeglad
 
+  - id: limits-app
+    type: check
+    name: Limity projektu (przed przeglądem bezpieczeństwa aplikacji)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: security-app
+    type: agent
+    name: Bezpieczeństwo (pełna aplikacja)
+    skill: sw-bezpieczenstwo
+    runner: claude
+    model: sonnet
+    prompt: |
+      Wczytaj skill sw-bezpieczenstwo i pracuj w trybie aplikacja (przegląd przed wdrożeniem, cztery punkty).
+      Wynik punktów zapisz w .ai/sw-run/przeglad.json.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "git ls-files *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+    verdicts: [pass, fail]
+
+  - id: app-check
+    type: check
+    name: Werdykt przeglądu aplikacji i raport (sw-przeglad)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-przeglad" '{{nodes.security-app.verdict}}'
+
+  - id: once-report
+    type: loop
+    name: Raport z przeglądu trafia do PR najwyżej raz
+    max: 1
+
+  - id: commit-report
+    type: git.commit
+    name: Commit raportu z przeglądu bezpieczeństwa
+    message: "docs: raport z przeglądu bezpieczeństwa aplikacji"
+
+  - id: report-merged
+    type: check
+    name: Raport z przeglądu jest w zmergowanym kodzie
+    command: ls docs/security/*-raport.md
+
+  - id: rounds-app
+    type: loop
+    name: Rundy poprawek po przeglądzie bezpieczeństwa aplikacji
+    max: 3
+
+  - id: limits-fix-app
+    type: check
+    name: Limity projektu (przed poprawką po przeglądzie aplikacji)
+    command: |
+      out="$(bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-limits")"; rc=$?; printf '%s\n' "$out"
+      [ "$rc" -eq 0 ] && [[ "$out" == *"WYNIK: OK"* ]]
+
+  - id: fix-app
+    type: agent
+    name: Inżynier (poprawka po przeglądzie bezpieczeństwa aplikacji)
+    skill: sw-inzynier
+    runner: claude
+    model: opus
+    prompt: |
+      Wczytaj skill sw-inzynier i pracuj w trybie poprawka: problemy z przeglądu bezpieczeństwa
+      pełnej aplikacji (runda poprawek {{nodes.rounds-app.iteration}} z {{nodes.rounds-app.max}}).
+      Problemy są w .ai/sw-run/uwagi.md. Usuń przyczynę (funkcję z kategorii wykluczonych,
+      sekret, adres bez uwierzytelnienia, rejestrację kont albo formularz zbierający dane osób
+      trzecich) razem z testami, które na niej polegają. Poprawka trafia do nowego PR, który
+      przechodzi recenzję, CI i przegląd bezpieczeństwa; testy E2E i przegląd aplikacji powtarzają się.
+
+      Zadanie: {{task}}
+    allowedTools: [Read, Write, Edit, Bash]
+    bashAllowlist:
+      - "gh issue view *"
+      - "gh pr checks *"
+      - "ls"
+      - "ls *"
+      - "cat *"
+      - "mkdir *"
+      - "chmod *"
+      - "git ls-files *"
+      - "bash scripts/*"
+    verdicts: [gotowa]
+
+  - id: pause-rounds-app
+    type: check
+    name: Wstrzymanie projektu po wyczerpaniu rund poprawek po przeglądzie aplikacji
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa aplikacji: fail po wyczerpaniu rund poprawek'
+
   - id: pause-rounds-mod
     type: check
     name: Wstrzymanie projektu po wyczerpaniu rund poprawek modułu
@@ -529,7 +632,7 @@ nodes:
 
   - id: done
     type: end
-    name: Moduł zmergowany, E2E zielone, projekt w przeglądzie
+    name: Moduł zmergowany, E2E zielone, przegląd bezpieczeństwa aplikacji zaliczony, raport w repozytorium
     status: success
 
   - id: stopped
@@ -640,7 +743,9 @@ edges:
   - { from: security-mod.failed, to: stopped }
   - { from: limits-merge-mod.pass, to: merge-mod }
   - { from: limits-merge-mod.fail, to: stopped }
-  - { from: merge-mod.pass, to: state-integ }
+  - { from: merge-mod.pass, to: report-merged }
+  - { from: report-merged.pass, to: done }
+  - { from: report-merged.fail, to: state-integ }
   - { from: merge-mod.fail, to: stopped }
 
   - { from: state-integ.pass, to: limits-test }
@@ -656,7 +761,27 @@ edges:
   - { from: tester.pass, to: state-review }
   - { from: tester.fail, to: rounds-test }
   - { from: tester.failed, to: stopped }
-  - { from: state-review.pass, to: done }
+  - { from: state-review.pass, to: limits-app }
+  - { from: limits-app.pass, to: security-app }
+  - { from: limits-app.fail, to: stopped }
+  - { from: security-app.pass, to: app-check }
+  - { from: security-app.fail, to: app-check }
+  - { from: security-app.failed, to: stopped }
+  - { from: app-check.pass, to: once-report }
+  - { from: once-report.repeat, to: commit-report }
+  - { from: once-report.exhausted, to: stopped }
+  - { from: app-check.fail, to: rounds-app }
+  - { from: commit-report.done, to: push-mod }
+  - { from: commit-report.nothing, to: stopped }
+  - { from: commit-report.failed, to: stopped }
+  - { from: rounds-app.repeat, to: limits-fix-app }
+  - { from: rounds-app.exhausted, to: pause-rounds-app }
+  - { from: limits-fix-app.pass, to: fix-app }
+  - { from: limits-fix-app.fail, to: stopped }
+  - { from: fix-app.gotowa, to: commit-mod }
+  - { from: fix-app.failed, to: stopped }
+  - { from: pause-rounds-app.pass, to: stopped }
+  - { from: pause-rounds-app.fail, to: stopped }
   - { from: state-review.fail, to: stopped }
 
   - { from: rounds-test.repeat, to: limits-fix-test }

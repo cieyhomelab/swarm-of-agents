@@ -155,8 +155,8 @@ assert nodes["tester"]["model"] == models["reviewer"] and nodes["tester"]["skill
 assert nodes["review-mod"]["model"] == models["reviewer"] != nodes["engineer"]["model"]
 assert nodes["security-mod"]["model"] == models["security"]
 # the architecture merge leads to the module, the module PR to the tests, only a pass to the review state
-assert ("merge.pass", "state-impl") in edges and ("merge-mod.pass", "state-integ") in edges
-assert ("tester.pass", "state-review") in edges and ("state-review.pass", "done") in edges
+assert ("merge.pass", "state-impl") in edges and ("report-merged.fail", "state-integ") in edges and ("merge-mod.pass", "report-merged") in edges
+assert ("tester.pass", "state-review") in edges and ("state-review.pass", "limits-app") in edges
 assert ("e2e-check.pass", "e2e-run") in edges and ("e2e-run.pass", "limits-tester") in edges
 for failing in ("e2e-check.fail", "e2e-run.fail", "tester.fail"):
     assert (failing, "rounds-test") in edges, failing
@@ -301,4 +301,39 @@ complete_impl() {
   pokrycie e2e
   [ "$status" -eq 1 ]
   [[ "$output" == *"scenariusz S10"* ]]
+}
+
+@test "S9 the security review of the whole application: nodes, loop equals fixRoundsPerPr, report only through the PR pipeline" {
+  run python3 - "$WF" "$ROOT/config/sw.json" <<'PY'
+import json, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+cfg = json.load(open(sys.argv[2]))
+nodes = {n["id"]: n for n in doc["nodes"]}
+edges = {(e["from"], e["to"]) for e in doc["edges"]}
+assert nodes["rounds-app"]["max"] == cfg["fixRoundsPerPr"]
+sec = nodes["security-app"]
+assert sec["skill"] == "sw-bezpieczenstwo" and sec["model"] == cfg["models"]["security"] and sec["verdicts"] == ["pass", "fail"]
+assert nodes["fix-app"]["model"] == cfg["models"]["engineer"] != sec["model"]
+# the review follows the green tests and the stage "przeglad", the verdict is judged by the script
+assert ("state-review.pass", "limits-app") in edges and ("limits-app.pass", "security-app") in edges
+assert "bin/sw-limits" in nodes["limits-app"]["command"]
+assert "bin/sw-przeglad" in nodes["app-check"]["command"] and "{{nodes.security-app.verdict}}" in nodes["app-check"]["command"]
+assert ("security-app.pass", "app-check") in edges and ("security-app.fail", "app-check") in edges
+# a failing review starts a fix round whose fix goes through a new PR; exhausted rounds pause
+assert ("app-check.fail", "rounds-app") in edges and ("rounds-app.repeat", "limits-fix-app") in edges
+assert ("fix-app.gotowa", "commit-mod") in edges and ("rounds-app.exhausted", "pause-rounds-app") in edges
+# the report is committed and goes through the review, CI, security and merge of the module PR; only then the task ends
+assert ("app-check.pass", "once-report") in edges and ("commit-report.done", "push-mod") in edges
+assert ("merge-mod.pass", "report-merged") in edges and ("report-merged.pass", "done") in edges
+assert ("state-review.pass", "done") not in edges
+print("ok")
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "S9 the sw-bezpieczenstwo skill describes the mode aplikacja: four points, przeglad.json and the verdict" {
+  f="$ROOT/skills/sw-bezpieczenstwo/SKILL.md"
+  for s in '## Tryb aplikacja' 'kategorii wykluczonych' 'sekretów' 'uwierzytelnienia' 'Jedno konto właściciela' '.ai/sw-run/przeglad.json' 'docs/security/<data>-raport.md'; do
+    grep -qF -- "$s" "$f" || { echo "missing: $s"; return 1; }
+  done
 }
