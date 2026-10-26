@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# sw-moduly zaloz — opens the issue of every module of the application (spec S5, data model
+# "Moduł"): for each docs/kontrakty/<modul>.md of the checkout in the working directory one
+# issue "Moduł: <modul>" with the labels "sw-modul" and "sw-modul-do-zrobienia" (the other
+# states are "sw-modul-w-pracy" and "sw-modul-zmergowany"; the manager moves them). The
+# issue body is the contract, so an engineer works from the issue alone. Every step reads
+# first, so a repeated run creates nothing twice: an issue found by its title (any state)
+# is left as it is. The state labels are created in the repository when missing.
+# Repository: origin of the checkout; SW_SPEC_REPO overrides it (tests).
+#
+# Output: WYNIK: MODULY <n> (nowych <m>) | STAN: BLAD <powód> with exit 1 (no contract,
+# GitHub fails).
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+[ "${1:-}" = zaloz ] || sw_die "uzycie: sw-moduly zaloz"
+
+repo="${SW_SPEC_REPO:-}"
+if [ -z "$repo" ]; then
+  sw_require git
+  url="$(git remote get-url origin 2>/dev/null)" || fail "brak zdalnego repozytorium origin"
+  repo="$(printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
+fi
+[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "niepoprawne repozytorium: $repo"
+
+contracts=()
+for f in docs/kontrakty/*.md; do
+  [ -f "$f" ] || continue
+  [ "$(basename "$f" | tr '[:upper:]' '[:lower:]')" = readme.md ] && continue
+  contracts+=("$f")
+done
+[ "${#contracts[@]}" -gt 0 ] || fail "brak kontraktow w docs/kontrakty"
+
+existing="$(gh api --paginate "repos/$repo/labels?per_page=100" --jq '.[].name')" || fail "nie mozna odczytac etykiet $repo"
+for label in sw-modul sw-modul-do-zrobienia sw-modul-w-pracy sw-modul-zmergowany; do
+  printf '%s\n' "$existing" | grep -qxF -- "$label" && continue
+  jq -n --arg n "$label" '{name: $n, color: "5319E7"}' \
+    | gh api -X POST "repos/$repo/labels" --input - >/dev/null || fail "nie mozna utworzyc etykiety $label"
+  sw_log "sw-moduly: etykieta $label"
+done
+
+titles="$(gh api --paginate "repos/$repo/issues?labels=sw-modul&state=all&per_page=100" --jq '.[].title')" \
+  || fail "nie mozna odczytac issues modulow"
+created=0
+for f in "${contracts[@]}"; do
+  module="$(basename "$f" .md)"
+  title="Moduł: $module"
+  printf '%s\n' "$titles" | grep -qxF -- "$title" && continue
+  body="$(printf "Kontrakt: \`%s\`\n\n%s\n" "$f" "$(cat "$f")")"
+  jq -n --arg t "$title" --arg b "$body" \
+    '{title: $t, body: $b, labels: ["sw-modul", "sw-modul-do-zrobienia"]}' \
+    | gh api -X POST "repos/$repo/issues" --input - >/dev/null || fail "nie mozna utworzyc issue modulu $module"
+  sw_log "sw-moduly: issue $title"
+  created=$((created + 1))
+done
+echo "WYNIK: MODULY ${#contracts[@]} (nowych $created)"

@@ -155,7 +155,7 @@ assert nodes["tester"]["model"] == models["reviewer"] and nodes["tester"]["skill
 assert nodes["review-mod"]["model"] == models["reviewer"] != nodes["engineer"]["model"]
 assert nodes["security-mod"]["model"] == models["security"]
 # the architecture merge leads to the module, the module PR to the tests, only a pass to the review state
-assert ("merge.pass", "state-impl") in edges and ("report-merged.fail", "state-integ") in edges and ("merge-mod.pass", "report-merged") in edges
+assert ("merge.pass", "moduly") in edges and ("moduly.pass", "state-impl") in edges and ("moduly.fail", "stopped") in edges and ("report-merged.fail", "state-integ") in edges and ("merge-mod.pass", "report-merged") in edges
 assert ("tester.pass", "state-review") in edges and ("state-review.pass", "limits-app") in edges
 assert ("e2e-check.pass", "e2e-run") in edges and ("e2e-run.pass", "limits-tester") in edges
 for failing in ("e2e-check.fail", "e2e-run.fail", "tester.fail"):
@@ -361,4 +361,87 @@ assert "sw-spec-pr\" pause" in nodes["pause-deploy"]["command"]
 print("ok")
 PY
   [ "$status" -eq 0 ]
+}
+
+# S5 many modules: two contracts that require each other through "Wymaga", with contract tests
+multi_arch() {
+  complete_arch
+  mkdir -p "$WORK/tests/kontrakty"
+  printf '# planer\n\n## Udostępnia\n- ekran menu\n\n## Wymaga\n- zakupy: lista zakupów\n\n## Forma\nczęść aplikacji\nJedna aplikacja.\n\n## Testy kontraktu\n- tests/kontrakty/planer.bats\n\n## Scenariusze\nS1\n' > "$WORK/docs/kontrakty/planer.md"
+  printf '# zakupy\n\n## Udostępnia\n- lista zakupów\n\n## Wymaga\nbrak\n\n## Forma\nosobna usługa\nWłasny cykl wdrażania.\n\n## Testy kontraktu\n- tests/kontrakty/zakupy.bats\n\n## Scenariusze\nS2\n' > "$WORK/docs/kontrakty/zakupy.md"
+  echo '@test "kontrakt planer" { true; }' > "$WORK/tests/kontrakty/planer.bats"
+  echo '@test "kontrakt zakupy" { true; }' > "$WORK/tests/kontrakty/zakupy.bats"
+}
+
+@test "S5 an architecture of two modules with requirements and contract tests passes the check" {
+  multi_arch
+  arch '["checks","e2e"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "WYNIK: OK" ]
+}
+
+@test "S5 docs/kontrakty/README.md is not counted as a module contract" {
+  multi_arch
+  echo '# Moduły' > "$WORK/docs/kontrakty/README.md"
+  arch '["checks","e2e"]'
+  [ "$status" -eq 0 ]
+}
+
+@test "S5 many modules: a scenario shared by two modules counts as assigned, one in none fails" {
+  multi_arch
+  sed -i 's/^S2$/S1/' "$WORK/docs/kontrakty/zakupy.md"
+  arch '["checks","e2e"]'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"scenariusz S2 nie jest przypisany"* ]]
+}
+
+@test "S5 many modules: a module without contract tests fails the check" {
+  multi_arch
+  sed -i '/^## Testy kontraktu$/,/^$/d' "$WORK/docs/kontrakty/zakupy.md"
+  arch '["checks","e2e"]'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"zakupy.md: brak testów kontraktu"* ]]
+}
+
+@test "S5 many modules: a contract test that does not exist or is empty fails the check" {
+  multi_arch
+  rm "$WORK/tests/kontrakty/planer.bats"; : > "$WORK/tests/kontrakty/zakupy.bats"
+  arch '["checks","e2e"]'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"planer.md: test kontraktu 'tests/kontrakty/planer.bats' nie istnieje albo jest pusty"* ]]
+  [[ "$output" == *"zakupy.md: test kontraktu 'tests/kontrakty/zakupy.bats' nie istnieje albo jest pusty"* ]]
+}
+
+@test "S5 many modules: a requirement on an unknown module or an item the module does not provide fails" {
+  multi_arch
+  sed -i 's/^- zakupy: lista zakupów$/- magazyn: stan/' "$WORK/docs/kontrakty/planer.md"
+  sed -i 's/^brak$/- planer: nieistniejąca pozycja/' "$WORK/docs/kontrakty/zakupy.md"
+  arch '["checks","e2e"]'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"wskazuje 'magazyn'"* ]]
+  [[ "$output" == *"chce 'nieistniejąca pozycja', a moduł planer tego nie udostępnia"* ]]
+}
+
+@test "S5 many modules: modules that require each other fail the check as a cycle" {
+  multi_arch
+  sed -i 's/^brak$/- planer: ekran menu/' "$WORK/docs/kontrakty/zakupy.md"
+  arch '["checks","e2e"]'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"moduły wymagają siebie nawzajem: planer -> zakupy -> planer"* ]]
+}
+
+@test "S5 many modules: free text in 'Wymaga' instead of 'brak' or a list fails the check" {
+  multi_arch
+  sed -i 's/^brak$/coś z zewnątrz/' "$WORK/docs/kontrakty/zakupy.md"
+  arch '["checks","e2e"]'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"'Wymaga' to 'brak' albo lista"* ]]
+}
+
+@test "S5 the sw-architekt skill describes the many-modules mode and multiModule defaults to false" {
+  f="$ROOT/skills/sw-architekt/SKILL.md"
+  for s in 'Tryb wielu modułów' 'multiModule' '## Testy kontraktu' 'bin/sw-moduly' 'cyklu'; do
+    grep -qF -- "$s" "$f" || { echo "missing: $s"; return 1; }
+  done
+  [ "$(jq -r '.multiModule' "$ROOT/config/sw.json")" = false ]
 }

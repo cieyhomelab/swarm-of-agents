@@ -22,6 +22,8 @@
 #    models from the Cezar run records, the SHA captured before the review, green
 #    check-runs of requiredChecks for that SHA.
 #
+#    After the merge bin/sw-moduly opens the issue "Moduł: <modul>" (sw-modul, sw-modul-do-zrobienia)
+#    for every contract (spec S5, many modules).
 # 5. Module (spec S6, S7; stage 2 has ONE module, so no dispatch): the project goes to
 #    sw-stan-implementacja (bin/sw-stan), sw-inzynier implements the module and writes a test
 #    for every "udostępnia" item and an E2E test for every scenario; commit, push and a draft
@@ -250,6 +252,11 @@ nodes:
     name: Wstrzymanie projektu po porażce przeglądu bezpieczeństwa
     command: |
       bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa architektury: fail'
+
+  - id: moduly
+    type: check
+    name: Issues modułów (sw-modul-do-zrobienia)
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-moduly" zaloz
 
   - id: state-impl
     type: check
@@ -730,7 +737,9 @@ edges:
   - { from: security.failed, to: stopped }
   - { from: limits-merge.pass, to: merge }
   - { from: limits-merge.fail, to: stopped }
-  - { from: merge.pass, to: state-impl }
+  - { from: merge.pass, to: moduly }
+  - { from: moduly.pass, to: state-impl }
+  - { from: moduly.fail, to: stopped }
   - { from: merge.fail, to: stopped }
   - { from: pause-rounds.pass, to: stopped }
   - { from: pause-rounds.fail, to: stopped }

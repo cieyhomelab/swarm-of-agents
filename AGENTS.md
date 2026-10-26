@@ -56,6 +56,7 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 - Konwencja pokrycia, którą sprawdza `bin/sw-pokrycie-check`:
   - `modul`: kontrakt `docs/kontrakty/<modul>.md` ma sekcję `## Pokrycie` z linią `- <pozycja „Udostępnia”> => <plik testu>` dla każdej pozycji, a plik istnieje i nie jest pusty;
   - `e2e`: każdy scenariusz specyfikacji (`### S<n>`) występuje jako identyfikator w jakimś pliku `tests/e2e/`, a w `tests/e2e/` nie ma konstrukcji pomijających test (`skip` jako polecenie bats, `test.skip(`, `xit(`, `@pytest.mark.skip` itp.; samo słowo w nazwie czy asercji nie liczy się).
+- Moduły (S5): po merge'u architektury `bin/sw-moduly zaloz` zakłada w repozytorium aplikacji issue „Moduł: <modul>” z etykietami `sw-modul` i `sw-modul-do-zrobienia` (treść = kontrakt; ponowny przebieg nie dubluje issues). `bin/sw-architektura-check` przy dwóch i więcej kontraktach sprawdza dodatkowo `## Wymaga` (`brak` albo `- <modul>: <pozycja>` istniejąca w „Udostępnia” innego modułu, bez cykli) i `## Testy kontraktu` (istniejące, niepuste pliki).
 - Poprawka po nieudanych testach E2E trafia do nowego PR modułu (recenzja, CI, bezpieczeństwo, `sw-merge kod`); rundy poprawek każdej pętli to `fixRoundsPerPr`.
 - Przegląd bezpieczeństwa pełnej aplikacji (S9): po `sw-stan-przeglad` `sw-bezpieczenstwo` (tryb `aplikacja`) zapisuje wynik czterech punktów w `.ai/sw-run/przeglad.json`, a `bin/sw-przeglad` rozstrzyga (werdykt i wszystkie punkty `pass`; sekrety dodatkowo skanuje sam). Wynik pozytywny daje `docs/security/<data>-raport.md`, który przechodzi PR modułu (recenzja, CI, bezpieczeństwo, `sw-merge kod`); dopiero zmergowany raport otwiera wdrożenie (sekcja „Wdrożenie”). Wynik negatywny to runda poprawek inżyniera (`rounds-app`, `fixRoundsPerPr`) z nowym PR, ponownymi testami E2E i ponownym przeglądem; wyczerpane rundy wstrzymują projekt.
 - Uwaga: gałąź zadania `sw-build` po merge'u architektury dostaje kolejne commity i drugi PR (to samo `git.draft-pr`); działanie na prawdziwym Cezarze trzeba potwierdzić według „Sprawdzenie na VPS”.
@@ -72,6 +73,7 @@ Wymagane narzędzia lokalnie: `bash`, `bats`, `shellcheck`, `jq`, `python3` z Py
 | Pole | Domyślnie | Znaczenie (specyfikacja) |
 |------|-----------|--------------------------|
 | `stage` | 1 | przełącznik etapu po zmergowanej specyfikacji (`bin/sw-build-start`): 1 przekazuje projekt łańcuchowi sh-* (`sw-handover-sh`), 2 uruchamia workflow `sw-build` i ustawia `sw-stan-architektura`; brak pola = 1 |
+| `multiModule` | false | tryb architekta (S5, etap 3): `false` = jeden moduł, `true` = co najmniej dwa moduły z `Wymaga` i `Testy kontraktu`; brak pola = `false`. Włącz dopiero, gdy kierownik przydziela moduły równolegle (kolejny krok etapu 3): `sw-build` implementuje wciąż jeden moduł |
 | `cycleHours` | 1 | interwał cyklu; automatyzacja „sw: przegląd co godzinę” |
 | `maxParallelAgents` | 3 | limit równoległych agentów projektu → `maxParallel` projektu w Cezarze (S6) |
 | `projectTimeLimitHours` | 168 | limit czasu projektu od zatwierdzenia pomysłu (S12) |

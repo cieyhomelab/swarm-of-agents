@@ -16,8 +16,8 @@ setup() {
   SW_PUSH_TOKEN_FILE="$WORK/token"; echo test-token > "$SW_PUSH_TOKEN_FILE"; export SW_PUSH_TOKEN_FILE
   export CEZ_PROJECT_ID=proj SW_SPEC_REPO=cieyhomelab/app SW_SPEC_BRANCH=build
   export FAKE_GH_API_URL="$MOCK_URL" CALLS="$WORK/calls" REVIEWS="$WORK/reviews" CIS="$WORK/cis" BREAK="$WORK/break"
-  export BREAKE2E="$WORK/breake2e" FAILE2E="$WORK/faile2e" TESTERS="$WORK/testers" LEAK="$WORK/leak" STUCK="$WORK/stuck" MOCK_URL
-  : > "$CALLS"; : > "$CIS"; : > "$BREAK"; : > "$BREAKE2E"; : > "$FAILE2E"; : > "$LEAK"; : > "$STUCK"; echo pass > "$TESTERS"
+  export MULTI="$WORK/multi" BREAKE2E="$WORK/breake2e" FAILE2E="$WORK/faile2e" TESTERS="$WORK/testers" LEAK="$WORK/leak" STUCK="$WORK/stuck" MOCK_URL
+  : > "$MULTI"; : > "$CALLS"; : > "$CIS"; : > "$BREAK"; : > "$BREAKE2E"; : > "$FAILE2E"; : > "$LEAK"; : > "$STUCK"; echo pass > "$TESTERS"
   printf '# Planer\n\nPomysł i jego ocena: https://github.com/cieyhomelab/sw-control/issues/7\n' > README.md
   printf '# Planer\n\n### S1: Menu\n- Zakładając tydzień, wtedy lista zakupów.\n\n### S2: Lista\n- Zakładając menu, wtedy lista.\n\n## Założenia\n- Język polski.\n' > .ai/specs/spec.md
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
@@ -52,6 +52,14 @@ case "$1" in
     scenarios="S1, S2"
     if [ "$1" = architect ] && [ -s "$BREAK" ]; then scenarios="S1"; fi
     printf '# planer\n\n## Udostępnia\n- ekran menu\n\n## Wymaga\nbrak\n\n## Forma\nczęść aplikacji\nJedna aplikacja.\n\n## Scenariusze\n%s\n' "$scenarios" > docs/kontrakty/planer.md
+    if [ -s "$MULTI" ]; then
+      # many modules (S5, stage 3): planer requires an item of zakupy; both have contract tests
+      mkdir -p tests/kontrakty
+      printf '# planer\n\n## Udostępnia\n- ekran menu\n\n## Wymaga\n- zakupy: lista zakupów\n\n## Forma\nczęść aplikacji\nJedna aplikacja.\n\n## Testy kontraktu\n- tests/kontrakty/planer.bats\n\n## Scenariusze\nS1\n' > docs/kontrakty/planer.md
+      printf '# zakupy\n\n## Udostępnia\n- lista zakupów\n\n## Wymaga\nbrak\n\n## Forma\nosobna usługa\nWłasny cykl.\n\n## Testy kontraktu\n- tests/kontrakty/zakupy.bats\n\n## Scenariusze\n%s\n' "$(if [ "$1" = architect ] && [ -s "$BREAK" ]; then echo S1; else echo S2; fi)" > docs/kontrakty/zakupy.md
+      echo '@test "kontrakt planer" { true; }' > tests/kontrakty/planer.bats
+      echo '@test "kontrakt zakupy" { true; }' > tests/kontrakty/zakupy.bats
+    fi
     printf 'name: CI\non:\n  pull_request:\njobs:\n  checks:\n    runs-on: ubuntu-latest\n    steps: [{run: "true"}]\n  e2e:\n    runs-on: ubuntu-latest\n    steps: [{run: "true"}]\n' > .github/workflows/ci.yml
     echo gotowa ;;
   engineer | fix-mod | fix-test | fix-app)
@@ -143,6 +151,36 @@ idea() { state | jq -c '.issues[] | select(.number == 7)'; }
   grep -q '^## Forma' docs/kontrakty/planer.md
   [ "$(grep -c 'S[12]' docs/kontrakty/planer.md)" -ge 1 ]
   grep -q 'pull_request' .github/workflows/ci.yml
+}
+
+app_issues() { state | jq -c '.app_issues["cieyhomelab/app"] // []'; }
+
+@test "S5 many modules: contracts of both modules pass the check and every module gets an issue sw-modul-do-zrobienia" {
+  echo multi > "$MULTI"
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  # the stage 2 mock engineer implements one module, so only the architecture phase is asserted
+  [[ "$output" == *"TRACE arch-check pass"* && "$output" == *"TRACE merge pass"* && "$output" == *"TRACE moduly pass"* ]]
+  [ "$(app_issues | jq -c 'map(.title) | sort')" = '["Moduł: planer","Moduł: zakupy"]' ]
+  [ "$(app_issues | jq -c 'map([.labels[].name] | sort) | unique')" = '[["sw-modul","sw-modul-do-zrobienia"]]' ]
+}
+
+@test "S5 many modules: a scenario assigned to no module starts a fix round, contract tests are required" {
+  echo multi > "$MULTI"; echo broken > "$BREAK"
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE arch-check fail"* && "$output" == *"TRACE rounds repeat"* ]]
+  [ "$(called fix)" -eq 1 ]
+  [ "$(app_issues | jq length)" -eq 2 ]
+}
+
+@test "S5 a single module also gets its issue" {
+  reviews approve approve
+  build
+  [ "$status" -eq 0 ]
+  [ "$(app_issues | jq -c 'map(.title)')" = '["Moduł: planer"]' ]
 }
 
 @test "S5 a scenario left unassigned starts a fix round before the review" {
