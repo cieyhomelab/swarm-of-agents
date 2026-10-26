@@ -164,6 +164,7 @@ journal_text() { state | jq -r '[.comments["1"][]?.body] | join("\n")'; }
   [ "$output" = "WYNIK: OK" ]
   [[ "$(app_runs | jq -r '.[1].task')" == *"[ponowienie 1; zastępuje a]" ]]
   [[ "$(journal_text)" == *"ponowienie: pomysł #5"*"brak commitu"* ]]
+  [ "$(app_runs | jq -r '.[0].status')" = cancelled ]
 }
 
 @test "S11 a commit within 3 hours is progress: nothing is retried" {
@@ -194,4 +195,15 @@ journal_text() { state | jq -r '[.comments["1"][]?.body] | join("\n")'; }
   [ "$(app_runs | jq length)" -eq 1 ]
   [[ "$(journal_text)" == *"zadanie nie wystartowało"*ANTHROPIC_API_KEY* ]]
   [[ "$(journal_text)" != *sk-x* ]]
+}
+
+@test "S11 a stalled task that cannot be cancelled gets no retry (never two tasks on one branch)" {
+  project 2026-10-19T12:00:00Z sw-stan-implementacja
+  runs '[{"id":"a","status":"running","updatedAt":"2026-10-20T01:00:00Z","task":"Zrob X"}]'
+  curl -fsS -X POST "$MOCK/__control" -d '{"cancel_fail": 500}' >/dev/null
+  run "$ROOT/bin/sw-limits" 5
+  [ "$status" -eq 1 ]
+  [[ "$output" == "STAN: BLAD nie mozna zatrzymac zadania a"* ]]
+  [ "$(app_runs | jq length)" -eq 1 ]
+  [ "$(app_runs | jq -r '.[0].status')" = running ]
 }

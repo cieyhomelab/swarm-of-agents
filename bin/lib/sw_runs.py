@@ -8,7 +8,8 @@ Reads one JSON object on stdin:
   stalledAfterHours, retriesPerTask, autoResumeLimit   numbers from the configuration
   progress        {runId: ISO time of the last commit on the run's branch}
 Prints one JSON object: {"planWait": bool, "actions": [...]}. An action is
-  {"kind": "retry"|"resume", "run", "task", "workflow", "model", "reason"} (a new task to start) or
+  {"kind": "retry"|"resume", "run", "task", "workflow", "model", "reason", "stop"} (a new task to start;
+  "stop" is true when the old task is still active and must be cancelled before the new one starts) or
   {"kind": "exhausted", "run", "reason"} (the project is to be paused).
 While any task waits for the plan limit ("autoResumeAt") nothing is retried or counted
 (S12: the suspension does not use retries). A task is handled once: a later task whose text
@@ -79,13 +80,15 @@ def plan(data):
             cause = f"brak commitu i zmiany stanu od {data['stalledAfterHours']:g} h"
         else:
             continue
+        active = status in ("running", "waiting")
         if n >= data["retriesPerTask"]:
             actions.append({"kind": "exhausted", "run": rid,
                             "reason": f"wyczerpane ponowienia ({n}/{data['retriesPerTask']}); ostatni stan: {status}, "
                                       f"krok {step}; przyczyna: {cause}"})
             continue
         actions.append({"kind": "retry", "run": rid, "workflow": run.get("workflow", ""),
-                        "model": run.get("model", ""), "reason": f"zadanie {rid}: {cause}, krok {step}; ponowienie {n + 1}/{data['retriesPerTask']}",
+                        "model": run.get("model", ""), "stop": active,
+                        "reason": f"zadanie {rid}: {cause}, krok {step}; ponowienie {n + 1}/{data['retriesPerTask']}",
                         "task": f"{base_task(run.get('task'))}\n\n[ponowienie {n + 1}; zastępuje {rid}]"})
     return {"planWait": False, "actions": actions}
 
