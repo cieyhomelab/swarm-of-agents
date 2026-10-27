@@ -68,25 +68,25 @@ decision() { run "$ROOT/bin/sw-gate"; echo "$output" | grep '^URUCHOM:'; }
   [ "$(decision)" = "URUCHOM: NIC" ]
 }
 
-@test "idea under evaluation with a live task gives NIC" {
-  for st in waiting running queued; do
+@test "an idea under evaluation waits for the owner's label (NIC), whatever the tasks" {
+  state "[$(issue 7 '{}' sw-w-ocenie)]"
+  [ "$(decision)" = "URUCHOM: NIC" ]
+  for st in waiting done failed cancelled; do
     state "[$(issue 7 '{"evalRunId":"r1"}' sw-w-ocenie)]" "[{\"id\":\"r1\",\"workflow\":\"sw-ocena\",\"status\":\"$st\"}]"
     [ "$(decision)" = "URUCHOM: NIC" ]
   done
 }
 
-@test "idea under evaluation with a lost task gives OCENA" {
-  for st in done failed cancelled review; do
-    state "[$(issue 7 '{"evalRunId":"r1"}' sw-w-ocenie)]" "[{\"id\":\"r1\",\"workflow\":\"sw-ocena\",\"status\":\"$st\"}]"
-    [ "$(decision)" = "URUCHOM: OCENA 7" ]
-  done
+@test "the owner's sw-zatwierdzony label gives SPEC even with sw-w-ocenie still on" {
+  state "[$(issue 7 '{}' sw-w-ocenie sw-zatwierdzony)]"
+  [ "$(decision)" = "URUCHOM: SPEC 7" ]
 }
 
-@test "evaluation task unknown to Cezar or missing from metadata gives OCENA" {
-  state "[$(issue 7 '{"evalRunId":"gone"}' sw-w-ocenie)]"
-  [ "$(decision)" = "URUCHOM: OCENA 7" ]
-  state "[$(issue 8 '{}' sw-w-ocenie)]"
-  [ "$(decision)" = "URUCHOM: OCENA 8" ]
+@test "the owner's sw-odrzucony label ends the idea even while it is open" {
+  state "[$(issue 7 '{}' sw-w-ocenie sw-odrzucony)]"
+  [ "$(decision)" = "URUCHOM: GENERATOR" ]
+  state "[$(issue 7 '{}' sw-zatwierdzony sw-odrzucony)]"
+  [ "$(decision)" = "URUCHOM: GENERATOR" ]
 }
 
 @test "another sw-sweep queued or running gives NIC even without a project" {

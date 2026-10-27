@@ -152,7 +152,8 @@ rejected() { # rejected <nr> <tytul> <problem+dla kogo>
   [ "$(jq -r '.odrzucone | length' "$SW_RUN_DIR/generator.json")" -eq 1 ]
   [ "$(jq -r '.odrzucone[0].tytul' "$SW_RUN_DIR/generator.json")" = "Budżet domowy" ]
   [ "$(jq -r '.odrzucone[0].problem' "$SW_RUN_DIR/generator.json")" = $'Brak kontroli wydatków\n\nDla kogo: single' ]
-  [ "$(jq -c '.odrzucone[0].wskazowki' "$SW_RUN_DIR/generator.json")" = '["za podobne do istniejących budżetów, pisz na [email]"]' ]
+  # the owner's reasons, with or without the sw:odrzucenie marker, scrubbed
+  [ "$(jq -c '.odrzucone[0].wskazowki' "$SW_RUN_DIR/generator.json")" = '["za podobne do istniejących budżetów, pisz na [email]","zwykły komentarz"]' ]
 }
 
 @test "the gate writes no generator.json while a project is active" {

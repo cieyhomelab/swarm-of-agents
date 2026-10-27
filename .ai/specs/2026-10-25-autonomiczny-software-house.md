@@ -69,20 +69,21 @@ Analityk, architekt, kierownik, inżynier, tester i reviewer to obecne role sh-*
 - Zakładając próbę będącą duplikatem odrzuconego pomysłu, wtedy nie trafia do właściciela, a dziennik zawiera przyczynę „duplikat”.
 
 ### S2: Ocena i zatwierdzenie pomysłu
-1. Właściciel otwiera powiadomienie w aplikacji na telefon.
-2. Widzi kartę pomysłu i rozmawia z modelem (analityk): zadaje pytania, doprecyzowuje zakres, odpowiada na pytania modelu.
-3. Model pokazuje podsumowanie ustaleń.
-4. Właściciel naciska „Zatwierdź”.
-5. Pomysł przechodzi w stan „zatwierdzony”, a system przechodzi do S4.
+> Zmiana właściciela z 2026-10-27: ocena odbywa się etykietą na GitHubie, bez rozmowy z modelem. Rozmowa w cezar-pwa (`sw-ocena`) zostaje jako opcja uruchamiana ręcznie.
+
+1. Właściciel dostaje powiadomienie z linkiem do issue pomysłu (etykiety `sw-pomysl`, `sw-w-ocenie`).
+2. Czyta kartę na GitHubie i opcjonalnie dopisuje komentarze z uwagami.
+3. Zmienia etykietę na `sw-zatwierdzony`.
+4. W następnym cyklu system przechodzi do S4; uwagi z komentarzy są wejściem dla specyfikacji.
 
 **Kryteria akceptacji**
-- Zakładając pomysł „w ocenie”, gdy właściciel otwiera powiadomienie, wtedy widzi kartę, pole rozmowy oraz przyciski „Zatwierdź” i „Odrzuć”.
-- Zakładając rozmowę, wtedy przed zatwierdzeniem widoczne jest podsumowanie ustaleń.
-- Zakładając naciśnięcie „Zatwierdź”, wtedy pomysł ma stan „zatwierdzony”, a podsumowanie ustaleń jest zapisane jako wejście dla specyfikacji.
+- Zakładając nową kartę, wtedy właściciel dostaje powiadomienie z linkiem do issue, a żadne zadanie nie czeka na jego odpowiedź.
+- Zakładając pomysł „w ocenie” bez etykiety decyzji, wtedy system nie podejmuje pracy nad nim ani nie generuje kolejnego pomysłu.
+- Zakładając etykietę `sw-zatwierdzony` (także gdy `sw-w-ocenie` nadal jest na issue), wtedy w następnym cyklu powstaje repozytorium aplikacji, issue ma `sw-stan-specyfikacja`, a „approvedAt” jest ustawione.
 - Zakładając zatwierdzenie (od etapu 2), wtedy aż do powiadomienia o wdrożeniu albo wstrzymaniu właściciel nie dostaje żadnej wiadomości wymagającej odpowiedzi.
 
 ### S3: Odrzucenie pomysłu
-1. Właściciel naciska „Odrzuć” i opcjonalnie wpisuje powód.
+1. Właściciel ustawia etykietę `sw-odrzucony` i opcjonalnie dopisuje powód w komentarzu.
 2. Pomysł przechodzi w stan „odrzucony”.
 3. Generator tworzy kolejny pomysł w następnym cyklu (S1), z powodem odrzucenia jako wskazówką.
 

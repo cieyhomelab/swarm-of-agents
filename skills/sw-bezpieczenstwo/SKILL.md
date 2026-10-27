@@ -15,9 +15,9 @@ Działasz na modelu `security`, w węźle `agent` workflowu `sw-spec`, jako zada
 
 ## Tryb ustalenia
 
-Wykonywany **przed** analitykiem. Czytasz `gh issue view <numer> --repo <owner>/<repo> --comments` i bierzesz pod uwagę wszystkie komentarze zaczynające się od `<!-- sw:ustalenia -->`. Brak takiego komentarza to `fail` („brak ustaleń”).
+Wykonywany **przed** analitykiem. Czytasz `gh issue view <numer> --repo <owner>/<repo> --comments` i bierzesz pod uwagę wszystkie komentarze pod kartą: komentarze `<!-- sw:ustalenia -->` oraz uwagi właściciela (każdy komentarz, który nie zaczyna się od „🤖”). Właściciel ocenia pomysł etykietą na GitHubie i komentarzy może nie dodać wcale: brak komentarzy to `pass`, bo analityk pracuje wtedy na samej karcie.
 
-`fail`, gdy komentarz zawiera:
+`fail`, gdy któryś z tych komentarzy zawiera:
 - dane osobowe właściciela lub osób trzecich: imiona i nazwiska, adresy, e-maile, numery telefonu, numery dokumentów, dane finansowe lub zdrowotne;
 - sekrety: tokeny, hasła, klucze, adresy wewnętrzne;
 - wymagania należące do kategorii wykluczonej;

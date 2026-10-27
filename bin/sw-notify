@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # sw-notify <rodzaj> <repo> <nr> <tytul> <url> — push notification for the owner
-# through the cezar-push gate (POST /m/push/gate). rodzaj: spec | blocked | deployed | paused.
+# through the cezar-push gate (POST /m/push/gate). rodzaj: pomysl | spec | blocked | deployed | paused.
+# "pomysl" (S1: a new idea card waits for the owner's label on GitHub) goes through the gate
+# as "spec"; the url is the idea issue.
 # "deployed" (S10) goes through the gate as "spec" and "paused" (S11) as "blocked" until
 # cezar-pwa has its own kinds; the private address of the application is in the title
 # (the url stays a GitHub link).
@@ -24,6 +26,7 @@ kind="$1" repo="$2" number="$3" title="$4" url="$5"
 
 case "$kind" in
   spec | blocked) gate="$kind" ;;
+  pomysl) gate=spec ;;    # TODO(cezar-pwa): gate "idea"
   deployed) gate=spec ;;  # TODO(cezar-pwa): gate "deployed"
   paused) gate=blocked ;; # TODO(cezar-pwa): gate "paused"
   *) sw_die "nieznany rodzaj powiadomienia: $kind" ;;

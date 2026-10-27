@@ -4,9 +4,11 @@
 # Prints the health line from sw-doctor and exactly one decision line:
 #   URUCHOM: NIC          nothing to start in this cycle
 #   URUCHOM: GENERATOR    no active project: generate an idea
-#   URUCHOM: OCENA <nr>   idea <nr> is "sw-w-ocenie" but its evaluation task is lost
 #   URUCHOM: SPEC <nr>    idea <nr> is "sw-zatwierdzony" and has no "repo" in its metadata
 #                         (bin/sw-create-repo <nr> creates the application repository)
+# The owner evaluates an idea on GitHub: the card waits with "sw-w-ocenie" (URUCHOM:
+# NIC) until the owner labels it "sw-zatwierdzony" (also while "sw-w-ocenie" is still
+# on it) or "sw-odrzucony" (the idea is no longer active, open or closed).
 # Before "URUCHOM: GENERATOR" it writes .ai/sw-run/generator.json (SW_RUN_DIR) in the
 # working directory: {"odrzucone": [{numer, tytul, problem, wskazowki: [..]}]}.
 # Further decisions (URUCHOM: PROJEKT, ...) are added by later implementation
@@ -21,8 +23,8 @@
 #     one "blocked" notification with a link to the journal is sent.
 # A "powiadomienie: ..." journal entry marks a sent notification (deduplication).
 #
-# Active project: open "sw-pomysl" issue in the control repository that is
-# "sw-w-ocenie", "sw-zatwierdzony" or has a "sw-stan-*" label other than
+# Active project: open "sw-pomysl" issue in the control repository without
+# "sw-odrzucony" that is "sw-w-ocenie", "sw-zatwierdzony" or has a "sw-stan-*" label other than
 # "sw-stan-wdrozony" / "sw-stan-wstrzymany". Projects already handed over to the
 # sh-* chain (repository with .ai/cezar/workflows/sh-delivery.yml) are left
 # alone. Every other active project first goes through bin/sw-limits: over its time or
@@ -137,7 +139,7 @@ issues="$(printf '%s' "$issues" | jq -c '
   [.[]? | select(.pull_request == null)
         | {number, labels: [.labels[].name],
            meta: ((.body // "") | capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {}))}
-        | select(any(.labels[]; . == "sw-stan-wstrzymany") | not)
+        | select(any(.labels[]; . == "sw-stan-wstrzymany" or . == "sw-odrzucony") | not)
         | select(any(.labels[]; . == "sw-w-ocenie" or . == "sw-zatwierdzony"
               or (startswith("sw-stan-") and . != "sw-stan-wdrozony" and . != "sw-stan-wstrzymany")))]' 2>/dev/null)" \
   || undecided "niepoprawna lista issues"
@@ -160,7 +162,6 @@ note_no_idea() {
 }
 
 active=0
-lost=""
 spec=""
 while IFS= read -r issue; do
   [ -n "$issue" ] || continue
@@ -177,31 +178,12 @@ while IFS= read -r issue; do
     sw_log "bramka: sprawdzenie limitow pomyslu #$number nie powiodlo sie: $limits"
   fi
   active=$((active + 1))
-  if printf '%s' "$issue" | jq -e '.labels | index("sw-w-ocenie")' >/dev/null; then
-    eval_id="$(printf '%s' "$issue" | jq -r '.meta.evalRunId // empty')"
-    if [ -z "$eval_id" ]; then
-      state=lost
-    else
-      body="$(cezar_get "/api/v1/p/$project_id/runs/$eval_id")"
-      case $? in
-        0) state="$(printf '%s' "$body" | jq -r '.status // "unknown"')" ;;
-        1) state=lost ;;
-        *) undecided "nie mozna odczytac zadania oceny $eval_id" ;;
-      esac
-    fi
-    case "$state" in
-      waiting|running|queued) ;;
-      *) [ -n "$lost" ] || lost="$number" ;;
-    esac
-  fi
   if [ -z "$repo" ] && [ -z "$spec" ] && printf '%s' "$issue" | jq -e '.labels | index("sw-zatwierdzony")' >/dev/null; then
     spec="$number"
   fi
 done < <(printf '%s' "$issues" | jq -c 'sort_by(.number)[]')
 
-if [ -n "$lost" ]; then
-  echo "URUCHOM: OCENA $lost"
-elif [ -n "$spec" ]; then
+if [ -n "$spec" ]; then
   echo "URUCHOM: SPEC $spec"
 elif [ "$active" -gt 0 ]; then
   echo "URUCHOM: NIC"

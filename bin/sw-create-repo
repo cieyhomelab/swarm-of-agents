@@ -24,7 +24,8 @@
 #      text, left by an interrupted run, is reused). The workflow file is seeded in
 #      step 3, so the task is started only when the checkout has it;
 #   5. ONE PATCH of the issue from a fresh read: meta "repo"/"projectId", label
-#      sw-zatwierdzony -> sw-stan-specyfikacja. The task is started BEFORE this
+#      sw-zatwierdzony (and sw-w-ocenie, when the owner left it) -> sw-stan-specyfikacja,
+#      "approvedAt" set when missing. The task is started BEFORE this
 #      patch: after a failed start the idea is still "sw-zatwierdzony" and a repeated
 #      run adopts the repository and tries again.
 #
@@ -55,7 +56,7 @@ if [ -z "$number" ]; then
     || fail "nie mozna odczytac issues $control"
   number="$(printf '%s' "$list" | jq -rs '
     [.[] | (if type == "array" then .[] else . end) | select(.pull_request == null)
-         | select(any(.labels[]?; .name == "sw-pomysl"))
+         | select(any(.labels[]?; .name == "sw-pomysl") and (any(.labels[]?; .name == "sw-odrzucony") | not))
          | select(((.body // "") | capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}"
                    | (try fromjson catch {}) | .repo // "") == "")
          | .number] | min // empty')" || fail "niepoprawna lista issues"
@@ -71,7 +72,8 @@ fi
 read_issue() {
   issue="$(gh api "repos/$control/issues/$number" 2>/dev/null)" || fail "nie mozna odczytac issue $control#$number"
   printf '%s' "$issue" | jq -e '(.state // "open") == "open" and any(.labels[]?; .name == "sw-pomysl")
-    and any(.labels[]?; .name == "sw-zatwierdzony")' >/dev/null || return 1
+    and any(.labels[]?; .name == "sw-zatwierdzony")
+    and (any(.labels[]?; .name == "sw-odrzucony") | not)' >/dev/null || return 1
   meta="$(printf '%s' "$issue" | jq -r '.body // ""' \
     | jq -Rs 'capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}" | (try fromjson catch {})')" \
     || fail "niepoprawne metadane issue $number"
@@ -251,8 +253,11 @@ fi
 
 # One PATCH from a fresh read: nothing else the issue holds is overwritten.
 read_issue || fail "issue $number zmienilo stan w trakcie tworzenia repozytorium $owner/$name"
-meta="$(jq -c --arg r "$owner/$name" --arg p "$project_id" 'del(.pendingRepo) + {repo: $r, projectId: $p}' <<<"$meta")"
-labels="$(printf '%s' "$issue" | jq -c '[.labels[].name | select(. != "sw-zatwierdzony")] + ["sw-stan-specyfikacja"] | unique')"
+# The owner approves on GitHub with the label, so "approvedAt" (the start of the project
+# time limit, sw-limits) is set here when the idea has none yet.
+meta="$(jq -c --arg r "$owner/$name" --arg p "$project_id" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  'del(.pendingRepo) + {repo: $r, projectId: $p} | .approvedAt //= $t' <<<"$meta")"
+labels="$(printf '%s' "$issue" | jq -c '[.labels[].name | select(. != "sw-zatwierdzony" and . != "sw-w-ocenie")] + ["sw-stan-specyfikacja"] | unique')"
 write_issue "$meta" "$labels" || fail "nie mozna zapisac repozytorium w issue $number ($owner/$name)"
 
 echo "WYNIK: REPO $owner/$name $project_id"

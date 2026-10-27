@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# sw-idea-notify — push notification for a new idea card (spec S1): the owner gets
+# the title and a link to the issue and evaluates it on GitHub by changing the label
+# "sw-w-ocenie" to "sw-zatwierdzony" or "sw-odrzucony". The target is the newest open
+# "sw-pomysl" + "sw-w-ocenie" issue (the sweep calls it right after the card).
+# Output: WYNIK: WYSLANO | WYNIK: POMINIETO <powód> (exit 0); STAN: BLAD <powód>
+# with exit 1 when GitHub cannot be read. A failed notification never fails the
+# sweep: the card stays on GitHub and the owner sees it there.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require gh jq
+
+control="$(jq -er '.controlRepo // empty' "$SW_CONFIG")" || { echo "STAN: BLAD brak controlRepo w konfiguracji"; exit 1; }
+list="$(gh api "repos/$control/issues?labels=sw-w-ocenie&state=open&per_page=100" 2>/dev/null)" \
+  || { echo "STAN: BLAD nie mozna odczytac issues $control"; exit 1; }
+card="$(printf '%s' "$list" | jq -c '[.[] | select(.pull_request == null)
+  | select(any(.labels[]?; .name == "sw-pomysl"))] | max_by(.number) // empty')"
+if [ -z "$card" ]; then
+  echo "WYNIK: POMINIETO brak pomyslu w ocenie"
+  exit 0
+fi
+number="$(jq -r .number <<<"$card")"
+title="Nowy pomysł: $(jq -r '.title // ""' <<<"$card")"
+url="https://github.com/$control/issues/$number"
+if "$here/sw-notify" pomysl "$control" "$number" "${title:0:100}" "$url" | grep -qx 'WYNIK: WYSLANO'; then
+  echo "WYNIK: WYSLANO"
+else
+  sw_log "sw-idea-notify: powiadomienie o pomysle #$number nie zostalo wyslane"
+  echo "WYNIK: POMINIETO powiadomienie nie zostalo wyslane"
+fi

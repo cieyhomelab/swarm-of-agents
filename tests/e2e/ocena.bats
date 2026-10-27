@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
-# E2E: the evaluation of an idea (S2, S3). The sw-sweep branches that start the
-# sw-ocena task (after a new card; for a lost task) and the sw-ocena workflow
-# itself are walked by tests/tools/run_workflow.py with a mock agent, exactly as
+# E2E: the evaluation of an idea (S2, S3). The owner evaluates a card on GitHub by
+# its label; the sweep only notifies and later reacts to the label. The optional
+# sw-ocena workflow (a conversation, not started by the sweep) is walked by tests/tools/run_workflow.py with a mock agent, exactly as
 # the workflows call the gate and the scripts on the VPS, against mocked APIs.
 
 setup() {
@@ -11,6 +11,7 @@ setup() {
   home="${SW_HOME:-/work}"
   WORK="$(mktemp -d)"
   cd "$WORK" || return 1
+  SW_PUSH_TOKEN_FILE="$WORK/token"; echo test-token > "$SW_PUSH_TOKEN_FILE"; export SW_PUSH_TOKEN_FILE
   export MOCK_AGENT="$WORK/agent"
   export PLAN="$WORK/plan"
   cat > "$MOCK_AGENT" <<'AGENT'
@@ -51,21 +52,29 @@ idea() { # idea <nr> <meta-json>
     body: ("## Problem i dla kogo\nx\n\n<!-- sw:meta " + $m + " -->")}'
 }
 
-@test "S2 a new card starts a non-autonomous sw-ocena task and stores its id in the metadata" {
+pushes() { curl -fsS "$MOCK_URL/__requests" | jq -c '[.[] | select(.method == "POST" and .path == "/m/push/gate")]'; }
+label() { # label <nr> <label>... — the owner relabels the idea on GitHub
+  local n="$1"; shift
+  control "$(state | jq -c --argjson n "$n" --args '{issues: [.issues[] | if .number == $n
+    then .labels = ([.labels[].name | select(. != "sw-w-ocenie")] + $ARGS.positional | map({name: .})) else . end]}' "$@")"
+}
+
+@test "S1 S2 a new card waits on GitHub and the owner gets a push linking the issue, no task is started" {
   control "{\"issues\": [$(base_issues)]}"
   sweep
   [ "$status" -eq 0 ]
-  [[ "$output" == *"TRACE start-ocena pass"* ]]
+  [[ "$output" == *"TRACE idea-notify pass"* ]]
   [[ "$output" == *"END done success"* ]]
-  [ "$(evals | jq length)" -eq 1 ]
-  [ "$(evals | jq -c '.[0] | {autonomous, project}')" = '{"autonomous":false,"project":"proj-sw-control"}' ]
+  [ "$(evals)" = "[]" ]
   card="$(state | jq -c '.issues[] | select(.labels | map(.name) | index("sw-w-ocenie"))')"
   [ "$(jq -r '.number' <<<"$card")" -eq 2 ]
-  [[ "$(jq -r '.body' <<<"$card")" == *"<!-- sw:meta {\"evalRunId\":\"$(evals | jq -r '.[0].id')\"} -->" ]]
-  [[ "$(evals | jq -r '.[0].task')" == *"#2"* ]]
+  [ "$(pushes | jq length)" -eq 1 ]
+  [ "$(pushes | jq -r '.[0].body.gate')" = spec ]
+  [ "$(pushes | jq -r '.[0].body.url')" = "https://github.com/cieyhomelab/sw-control/issues/2" ]
+  [[ "$(pushes | jq -r '.[0].body.title')" == "Nowy pomysł: "* ]]
 }
 
-@test "S2 a failed attempt starts no evaluation task" {
+@test "S1 a failed attempt sends no notification and starts no task" {
   control "{\"issues\": [$(base_issues)]}"
   cat > "$MOCK_AGENT" <<'AGENT'
 #!/usr/bin/env bash
@@ -75,30 +84,36 @@ AGENT
   sweep
   [ "$status" -eq 0 ]
   [ "$(evals)" = "[]" ]
+  [ "$(pushes)" = "[]" ]
 }
 
-@test "S2 an evaluation that is still running gets no second task" {
-  control "{\"issues\": [$(base_issues), $(idea 2 '{"evalRunId":"r1"}')],
-            \"runs\": [{\"id\": \"r1\", \"workflow\": \"sw-ocena\", \"status\": \"waiting\"}]}"
+@test "S2 an idea waiting for the owner's label gets no task and no new idea" {
+  control "{\"issues\": [$(base_issues), $(idea 2 '{}')], \"runs\": []}"
   sweep
   [ "$status" -eq 0 ]
-  [[ "$output" != *"TRACE start-ocena"* ]]
-  [ "$(state | jq '.runs | length')" -eq 1 ]
+  [[ "$output" == *"TRACE is-spec false"* ]]
+  [ "$(state | jq '.runs | length')" -eq 0 ]
+  [ "$(state | jq '[.issues[] | select(.labels | map(.name) | index("sw-pomysl"))] | length')" -eq 1 ]
 }
 
-@test "S2 URUCHOM: OCENA for a lost task creates a new evaluation task for that issue" {
-  control "{\"issues\": [$(base_issues), $(idea 2 '{"evalRunId":"gone"}')], \"runs\": []}"
+@test "S2 the owner's sw-zatwierdzony label starts the repository and the spec in the next cycle" {
+  control "{\"issues\": [$(base_issues), $(idea 2 '{}')]}"
+  label 2 sw-zatwierdzony
   sweep
   [ "$status" -eq 0 ]
-  [[ "$output" == *"TRACE is-ocena true"* ]]
-  [[ "$output" == *"TRACE start-ocena pass"* ]]
-  [ "$(evals | jq length)" -eq 1 ]
-  [[ "$(evals | jq -r '.[0].task')" == *"#2"* ]]
-  body="$(state | jq -r '.issues[] | select(.number == 2) | .body')"
-  [[ "$body" == *"<!-- sw:meta {\"evalRunId\":\"$(evals | jq -r '.[0].id')\"} -->" ]]
-  # the next cycle sees a live task and leaves it alone
+  [[ "$output" == *"TRACE create-repo pass"* ]]
+  [ "$(state | jq -c '[.issues[] | select(.number == 2) | .labels[].name]')" = '["sw-pomysl","sw-stan-specyfikacja"]' ]
+  [ "$(state | jq '[.runs[] | select(.workflow == "sw-spec")] | length')" -eq 1 ]
+}
+
+@test "S3 the owner's sw-odrzucony label lets the next cycle generate a new idea" {
+  control "{\"issues\": [$(base_issues), $(idea 2 '{}')]}"
+  label 2 sw-odrzucony
   sweep
-  [ "$(evals | jq length)" -eq 1 ]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE is-generator true"* ]]
+  [[ "$output" == *"TRACE attempts repeat"* ]]
+  [ "$(state | jq -c '[.issues[] | select(.number == 2) | .labels[].name] | sort')" = '["sw-odrzucony","sw-pomysl"]' ]
 }
 
 evaluate() { # evaluate <history-json> — the sw-ocena workflow for idea 2 with that task history
