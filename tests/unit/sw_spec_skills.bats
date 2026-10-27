@@ -110,7 +110,12 @@ doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 nodes = {n["id"]: n for n in doc["nodes"]}
 edges = {(e["from"], e["to"]) for e in doc["edges"]}
 assert ("start", "sec-ustalenia") in edges
-assert ("sec-ustalenia.pass", "analyst") in edges and ("sec-ustalenia.fail", "stopped") in edges
+assert ("sec-ustalenia.pass", "analyst") in edges and ("sec-ustalenia.fail", "pause-ustalenia") in edges
+assert ("pause-ustalenia.pass", "stopped") in edges
+# regression: a stop without a merge never just ends; it retries or pauses (bin/sw-spec-stop)
+into_stopped = {f for (f, t) in edges if t == "stopped"}
+assert all(f.split(".")[0] in ("pause-rounds", "pause-security", "pause-ustalenia", "stop") for f in into_stopped), into_stopped
+assert "sw-spec-stop" in nodes["stop"]["command"]
 assert ("review.zatwierdzona", "security") in edges and ("review.uwagi", "rounds") in edges
 assert ("rounds.exhausted", "pause-rounds") in edges and ("pause-rounds.pass", "stopped") in edges
 assert ("security.pass", "pr-body") in edges and ("pr-body.pass", "merge") in edges
