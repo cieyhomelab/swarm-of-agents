@@ -146,3 +146,22 @@ YAML
   max="$(python3 -c 'import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print([n["max"] for n in d["nodes"] if n["id"]=="attempts"][0])' "$ROOT/workflows/sw-sweep.yml")"
   [ "$max" = "$(jq -r .ideaAttemptsPerCycle "$ROOT/config/sw.json")" ]
 }
+
+# Regression: Cezar turns each entry into Bash(<entry>:*), so "gh issue view *" only
+# allowed that literal text and every real call was denied.
+@test "a glob in bashAllowlist is rejected" {
+  write sw-g.yml <<'YAML'
+version: 2
+name: sw-g
+nodes:
+  - { id: start, type: start }
+  - { id: work, type: agent, runner: claude, model: opus, prompt: "x", allowedTools: [Bash], bashAllowlist: ["gh issue view *"] }
+  - { id: done, type: end, status: success }
+edges:
+  - { from: start, to: work }
+  - { from: work.done, to: done }
+YAML
+  run python3 "$ROOT/tests/tools/validate_workflows.py" "$TMP/sw-g.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"must be a plain command prefix"* ]]
+}

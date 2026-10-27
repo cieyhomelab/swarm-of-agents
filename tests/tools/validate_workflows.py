@@ -72,6 +72,12 @@ def validate(path):
                 errors.append(f"{path}: agent node '{nid}' must set runner: claude")
             if not node.get("model"):
                 errors.append(f"{path}: agent node '{nid}' must set an explicit model")
+            # Cezar turns each entry into the claude prefix rule Bash(<entry>:*):
+            # a glob such as "gh issue view *" would only allow that literal text.
+            for entry in node.get("bashAllowlist") or []:
+                if "*" in str(entry):
+                    errors.append(f"{path}: agent node '{nid}' bashAllowlist entry '{entry}' must be a "
+                                  "plain command prefix without '*'")
         if ntype == "check" and not node.get("command"):
             errors.append(f"{path}: check node '{nid}' needs a command")
         nodes[nid] = ports
