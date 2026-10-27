@@ -32,14 +32,14 @@ gate_command() {
   [[ "$output" == *"URUCHOM: NIC"* ]]
 }
 
-@test "sweep gate restarts the evaluation of a lost task" {
+@test "sweep gate turns the owner's sw-zatwierdzony label into SPEC" {
   curl -fsS -X POST "$MOCK_URL/__control" -d '{
-    "issues": [{"number": 3, "state": "open", "body": "<!-- sw:meta {\"evalRunId\":\"r1\"} -->",
-                "labels": [{"name": "sw-pomysl"}, {"name": "sw-w-ocenie"}]}],
+    "issues": [{"number": 3, "state": "open", "body": "<!-- sw:meta {} -->",
+                "labels": [{"name": "sw-pomysl"}, {"name": "sw-w-ocenie"}, {"name": "sw-zatwierdzony"}]}],
     "runs": []}' >/dev/null
   run bash -c "$(gate_command)"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"URUCHOM: OCENA 3"* ]]
+  [[ "$output" == *"URUCHOM: SPEC 3"* ]]
 }
 
 @test "sweep gate takes no action in a project on the sh-* chain" {

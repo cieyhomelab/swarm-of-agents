@@ -52,8 +52,11 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   [ "$(jq -c '[.issues[0].labels[].name]' <<<"$s")" = '["sw-pomysl","sw-stan-specyfikacja"]' ]
   body="$(jq -r '.issues[0].body' <<<"$s")"
   [[ "$body" == "## Problem i dla kogo"* ]]
-  [ "$(printf '%s' "$body" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p' | jq -cS .)" \
+  meta="$(printf '%s' "$body" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -cS 'del(.approvedAt)' <<<"$meta")" \
     = '{"projectId":"proj-planer-posilkow-lodzki-zolw","repo":"cieyhomelab/planer-posilkow-lodzki-zolw"}' ]
+  # approved by the owner's label: the time limit starts now
+  [[ "$(jq -r .approvedAt <<<"$meta")" =~ ^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]]
 }
 
 @test "maxParallel comes from the configuration" {
@@ -106,7 +109,7 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   [ "$(jq -c '.repos["cieyhomelab/planer"].topics' <<<"$s")" = '["sw-projekt"]' ]
   [[ "$(readme cieyhomelab/planer)" == *"issues/7"* ]]
   meta="$(jq -r '.issues[0].body' <<<"$s" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
-  [ "$(jq -cS . <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
+  [ "$(jq -cS 'del(.approvedAt)' <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
 }
 
 @test "a name written before POST create is adopted by the next run (issue #37)" {
@@ -125,7 +128,7 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   s="$(state)"
   [ "$(jq -c '[.repos | keys[]]' <<<"$s")" = '["cieyhomelab/planer"]' ]
   meta="$(jq -r '.issues[0].body' <<<"$s" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
-  [ "$(jq -cS . <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
+  [ "$(jq -cS 'del(.approvedAt)' <<<"$meta")" = '{"projectId":"proj-planer","repo":"cieyhomelab/planer"}' ]
 }
 
 @test "a name taken by somebody else is not left claimed after 409 (issue #39)" {
@@ -202,4 +205,24 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   control "{\"issues\": [$(idea 7 '!!!')]}"
   run "$ROOT/bin/sw-create-repo" 7
   [ "${lines[-1]}" = "WYNIK: REPO cieyhomelab/aplikacja proj-aplikacja" ]
+}
+
+@test "an existing approvedAt is kept and sw-w-ocenie left by the owner is removed" {
+  curl -fsS -X POST "$SW_CEZAR_URL/__control" -d "$(jq -nc '{issues: [{number: 7, state: "open", title: "Planer",
+    body: "x\n<!-- sw:meta {\"approvedAt\":\"2026-10-01T00:00:00Z\"} -->",
+    labels: [{name: "sw-pomysl"}, {name: "sw-w-ocenie"}, {name: "sw-zatwierdzony"}]}]}')" >/dev/null
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 0 ]
+  s="$(curl -fsS -X POST -d '{}' "$SW_CEZAR_URL/__control")"
+  [ "$(jq -c '[.issues[0].labels[].name]' <<<"$s")" = '["sw-pomysl","sw-stan-specyfikacja"]' ]
+  meta="$(jq -r '.issues[0].body' <<<"$s" | sed -n 's/.*<!-- sw:meta \(.*\) -->/\1/p')"
+  [ "$(jq -r .approvedAt <<<"$meta")" = "2026-10-01T00:00:00Z" ]
+}
+
+@test "an idea the owner rejected is skipped even with sw-zatwierdzony" {
+  curl -fsS -X POST "$SW_CEZAR_URL/__control" -d "$(jq -nc '{issues: [{number: 7, state: "open", title: "Planer",
+    body: "x\n<!-- sw:meta {} -->", labels: [{name: "sw-pomysl"}, {name: "sw-zatwierdzony"}, {name: "sw-odrzucony"}]}]}')" >/dev/null
+  run "$ROOT/bin/sw-create-repo"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "WYNIK: POMINIETO brak zatwierdzonego pomyslu bez repozytorium" ]
 }

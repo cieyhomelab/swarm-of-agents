@@ -77,7 +77,8 @@ sw_norm() {
 # sw_rejected_ideas — rejected ideas (sw-pomysl + sw-odrzucony, any state) of the
 # control repository as one JSON array
 # [{numer, tytul, problem, wskazowki: [..]}]. "problem" is the card section
-# "Problem i dla kogo", "wskazowki" the redacted sw:odrzucenie comments.
+# "Problem i dla kogo", "wskazowki" the comments on the rejected issue (the owner's
+# reasons; an optional "<!-- sw:odrzucenie -->" first line is dropped), scrubbed.
 # Status 1 when GitHub cannot be read.
 sw_rejected_ideas() {
   local control issues number hints out="[]" item hint
@@ -100,7 +101,7 @@ sw_rejected_ideas() {
       hints="$(jq -c --arg h "$hint" '. + [$h]' <<<"$hints")"
     done < <(gh api --paginate "repos/$control/issues/$number/comments?per_page=100" 2>/dev/null \
       | jq -c '(if type == "array" then .[] else . end) | .body // ""
-               | select(startswith("<!-- sw:odrzucenie -->"))
+               | select(length > 0) | select(startswith("🤖") | not)
                | sub("^<!-- sw:odrzucenie -->\\s*"; "") | gsub("\n"; " ")')
     out="$(jq -c --argjson i "$item" --argjson h "$hints" '. + [$i + {wskazowki: $h}]' <<<"$out")"
   done < <(printf '%s' "$issues" | jq -c '.[]')

@@ -3,9 +3,10 @@
 # and decides what to start in this cycle. On "URUCHOM: GENERATOR" the sw-generator
 # agent tries up to ideaAttemptsPerCycle ideas (the loop max below; a test keeps it
 # equal to config/sw.json); a failed attempt is written to the journal, the first
-# good one becomes an idea card and bin/sw-start-ocena starts its sw-ocena task.
-# On "URUCHOM: OCENA <nr>" (an evaluation task that got lost, e.g. after a Cezar
-# restart) sw-start-ocena starts a new task for that idea. On "URUCHOM: SPEC <nr>"
+# good one becomes an idea card (issue with sw-pomysl + sw-w-ocenie) and
+# bin/sw-idea-notify sends the owner a push with a link to it. The owner evaluates
+# the idea on GitHub by labelling it sw-zatwierdzony or sw-odrzucony; no agent talks
+# to the owner. On "URUCHOM: SPEC <nr>"
 # (an approved idea without a repository) bin/sw-create-repo creates the private
 # application repository and starts its sw-spec task; sw-spec then leads to
 # sw-build or to the handover, by the stage switch in config/sw.json.
@@ -57,11 +58,6 @@ nodes:
     name: Karta pomysłu
     command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-idea-card" karta
 
-  - id: is-ocena
-    type: if
-    name: Zaginione zadanie oceny?
-    condition: { kind: output, ref: gate.output, op: contains, value: "URUCHOM: OCENA" }
-
   - id: is-spec
     type: if
     name: Zatwierdzony pomysł bez repozytorium?
@@ -77,10 +73,10 @@ nodes:
     name: Powstała nowa karta?
     condition: { kind: output, ref: card.output, op: contains, value: "WYNIK: KARTA" }
 
-  - id: start-ocena
+  - id: idea-notify
     type: check
-    name: Zadanie oceny pomysłu
-    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-start-ocena"
+    name: Powiadomienie o nowym pomyśle
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-idea-notify"
 
   - id: card-rejected
     type: if
@@ -109,9 +105,7 @@ edges:
   - { from: start, to: gate }
   - { from: gate.pass, to: is-generator }
   - { from: is-generator.true, to: attempts }
-  - { from: is-generator.false, to: is-ocena }
-  - { from: is-ocena.true, to: start-ocena }
-  - { from: is-ocena.false, to: is-spec }
+  - { from: is-generator.false, to: is-spec }
   - { from: is-spec.true, to: create-repo }
   - { from: is-spec.false, to: done }
   - { from: create-repo.pass, to: done }
@@ -125,10 +119,10 @@ edges:
   - { from: card.fail, to: degraded }
   - { from: card-rejected.true, to: attempts }
   - { from: card-rejected.false, to: card-created }
-  - { from: card-created.true, to: start-ocena }
+  - { from: card-created.true, to: idea-notify }
   - { from: card-created.false, to: done }
-  - { from: start-ocena.pass, to: done }
-  - { from: start-ocena.fail, to: degraded }
+  - { from: idea-notify.pass, to: done }
+  - { from: idea-notify.fail, to: degraded }
   - { from: failed-attempt.pass, to: attempts }
   - { from: failed-attempt.fail, to: degraded }
   - { from: no-idea.pass, to: done }

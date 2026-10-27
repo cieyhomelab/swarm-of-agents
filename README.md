@@ -26,7 +26,7 @@ State lives in the private control repository `sw-control`. Each idea is an issu
 
 1. **Cycle.** The Cezar automation `sw: przegląd co godzinę` runs `sw-sweep` in `sw-control`. `bin/sw-gate` decides what to do. At most one project is active at a time.
 2. **Idea (S1).** When nothing is active, `sw-generator` invents an idea and checks it on the web. It rejects excluded categories (`config/kategorie-wykluczone.md`), ideas that free tools already cover, ideas without sources and duplicates. A good idea becomes an issue with an idea card, and you get a push notification.
-3. **Evaluation (S2, S3) — your only step.** Open the notification in cezar-pwa. Talk with `sw-analityk` about the idea. It shows a summary and two buttons, **Zatwierdź** (approve) and **Odrzuć** (reject). If you reject, the next cycle generates a new idea and uses your reason as a hint.
+3. **Evaluation (S2, S3) — your only step.** The notification links the idea issue on GitHub (labels `sw-pomysl`, `sw-w-ocenie`). Nothing happens until you label it: **`sw-zatwierdzony`** to build it, **`sw-odrzucony`** to reject it. You can add comments first; the analyst treats them as requirements, and on a rejected idea the generator takes them as hints. The next cycle reacts to the label.
 4. **Repository and spec (S4).** The swarm creates a private repo named after the idea. The analyst writes the spec. An independent reviewer and a security review check it, and the spec PR is merged automatically.
 5. **Build (S5–S9, stage 2 and 3).** The architect picks a stack and splits the app into modules with contracts. It adds a skeleton and CI. Engineers implement the modules, with up to `maxParallelAgents` agents working at once. The integrator assembles the modules. The tester runs E2E tests, and a security review checks the whole app. Each PR is merged only when a reviewer on another model approved it, CI is green and the security review passed.
 6. **Deploy (S10).** `bin/sw-deploy` runs the app in Docker on an internal network. The only way in is an nginx proxy with basic auth on `deploy.bindAddress`. You get a notification with the address.
@@ -70,7 +70,7 @@ On the VPS:
 
    It creates the private `sw-control` repo and registers it as a Cezar project if it is missing. It adds the `sw-*` labels, copies `sw-sweep` and `sw-ocena` into `.ai/cezar/workflows/`, opens the `sw-dziennik` issue and creates the `sw: przegląd co godzinę` automation, enabled. You can safely run it again: it only adds or updates what differs, and it never deletes automations. The last line is `STAN: OK` or `STAN: BLAD <reason>`.
 
-4. **Let evaluations wait for you.** Cezar closes a session that waits for an answer after `resources.idleTimeoutMinutes` (15 by default). An idea evaluation would then end without your decision. Turn the limit off (it applies to the whole Cezar; waiting tasks hold no slot):
+4. **Optional: conversations that wait for you.** The sweep does not start any conversation; you evaluate ideas with labels. If you start the optional `sw-ocena` conversation by hand, note that Cezar closes a session that waits for an answer after `resources.idleTimeoutMinutes` (15 by default). To let it wait, turn the limit off (it applies to the whole Cezar; waiting tasks hold no slot):
 
    ```bash
    curl -s -X PUT http://127.0.0.1:4321/api/v1/workspace/config -H 'Content-Type: application/json' \
@@ -97,7 +97,7 @@ On the VPS:
 
 ## Day to day
 
-- **Approve or reject ideas** in cezar-pwa when a notification arrives. That is the only input the swarm needs.
+- **Approve or reject ideas** on GitHub with the label `sw-zatwierdzony` or `sw-odrzucony` when a notification arrives. That is the only input the swarm needs.
 - **Follow progress** in `sw-control`: the labels on the idea issue show the state, and the `sw-dziennik` issue logs each event. App repos are tagged with the GitHub topic `sw-projekt`.
 - **Notifications** you can get: new idea, spec ready (stage 1), app deployed (with address), project paused (with reason), and blocked (no idea or a broken environment for `noIdeaNotifyAfterCycles` cycles in a row). From stage 2, deployed and paused notifications also show the share of projects finished without intervention, for example ` · 67% bez interwencji`.
 - **Change limits** in `config/sw.json`, for example `maxParallelAgents`, `projectTimeLimitHours`, `projectUsageLimitUsd` or `models.*`. Scripts read the file on every run. After changing `cycleHours` or the workflows, run `sw-start` again to update the automation and the workflow copies.
