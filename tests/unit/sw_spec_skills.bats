@@ -94,9 +94,9 @@ for n in doc["nodes"]:
     for entry in allow:
         assert entry.split()[0] in ("gh", "git", "ls", "cat"), (n["id"], entry)
         if entry.startswith("gh "):
-            assert entry == "gh issue view *", (n["id"], entry)
+            assert entry == "gh issue view", (n["id"], entry)
         if entry.startswith("git "):
-            assert entry == "git diff *", (n["id"], entry)
+            assert entry == "git diff", (n["id"], entry)
     assert "Bash" not in n["allowedTools"] or allow
 print("ok")
 PY

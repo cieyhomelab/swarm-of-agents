@@ -100,14 +100,13 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
+      - "gh issue view"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
     verdicts: [gotowa]
 
   - id: commit
@@ -153,12 +152,11 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr diff *"
-      - "git diff *"
+      - "gh issue view"
+      - "gh pr diff"
+      - "git diff"
       - "ls"
-      - "ls *"
-      - "cat *"
+      - "cat"
     verdicts: [approve, changes]
 
   - id: ci
@@ -192,15 +190,14 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr checks *"
+      - "gh issue view"
+      - "gh pr checks"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
     verdicts: [gotowa]
 
   - id: arch-check-fix
@@ -229,10 +226,9 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "git diff *"
+      - "gh issue view"
+      - "git diff"
       - "ls"
-      - "ls *"
     verdicts: [pass, fail]
 
   - id: limits-merge
@@ -297,15 +293,14 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr checks *"
+      - "gh issue view"
+      - "gh pr checks"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
     verdicts: [gotowa]
 
   - id: commit-mod
@@ -351,12 +346,11 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr diff *"
-      - "git diff *"
+      - "gh issue view"
+      - "gh pr diff"
+      - "git diff"
       - "ls"
-      - "ls *"
-      - "cat *"
+      - "cat"
     verdicts: [approve, changes]
 
   - id: ci-mod
@@ -390,15 +384,14 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr checks *"
+      - "gh issue view"
+      - "gh pr checks"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
     verdicts: [gotowa]
 
   - id: mod-check-fix
@@ -427,10 +420,9 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "git diff *"
+      - "gh issue view"
+      - "git diff"
       - "ls"
-      - "ls *"
     verdicts: [pass, fail]
 
   - id: limits-merge-mod
@@ -495,16 +487,15 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr checks *"
+      - "gh issue view"
+      - "gh pr checks"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
-      - "bash bin/sw-integracja *"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
+      - "bash bin/sw-integracja"
     verdicts: [zlozona, bez-zmian]
 
   - id: integ-check
@@ -539,16 +530,15 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr checks *"
+      - "gh issue view"
+      - "gh pr checks"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
-      - "bash bin/sw-integracja *"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
+      - "bash bin/sw-integracja"
     verdicts: [gotowa]
 
   - id: limits-test
@@ -597,9 +587,8 @@ nodes:
     allowedTools: [Read, Write, Bash]
     bashAllowlist:
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "bash scripts/*"
+      - "cat"
+      - "bash scripts/"
     verdicts: [pass, fail]
 
   - id: rounds-test
@@ -629,15 +618,14 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr checks *"
+      - "gh issue view"
+      - "gh pr checks"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
     verdicts: [gotowa]
 
   - id: state-review
@@ -665,12 +653,11 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "git ls-files *"
+      - "gh issue view"
+      - "git ls-files"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
+      - "cat"
+      - "mkdir"
     verdicts: [pass, fail]
 
   - id: app-check
@@ -722,15 +709,14 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "gh pr checks *"
+      - "gh issue view"
+      - "gh pr checks"
       - "ls"
-      - "ls *"
-      - "cat *"
-      - "mkdir *"
-      - "chmod *"
-      - "git ls-files *"
-      - "bash scripts/*"
+      - "cat"
+      - "mkdir"
+      - "chmod"
+      - "git ls-files"
+      - "bash scripts/"
     verdicts: [gotowa]
 
   - id: pause-rounds-app

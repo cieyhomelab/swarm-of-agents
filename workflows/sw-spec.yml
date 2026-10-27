@@ -49,9 +49,8 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Bash]
     bashAllowlist:
-      - "gh issue view *"
+      - "gh issue view"
       - "ls"
-      - "ls *"
     verdicts: [pass, fail]
 
   - id: analyst
@@ -66,9 +65,8 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
+      - "gh issue view"
       - "ls"
-      - "ls *"
     verdicts: [gotowa]
 
   - id: commit
@@ -102,10 +100,9 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Bash]
     bashAllowlist:
-      - "gh issue view *"
+      - "gh issue view"
       - "ls"
-      - "ls *"
-      - "cat *"
+      - "cat"
     verdicts: [zatwierdzona, uwagi]
 
   - id: rounds
@@ -126,9 +123,8 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Write, Edit, Bash]
     bashAllowlist:
-      - "gh issue view *"
+      - "gh issue view"
       - "ls"
-      - "ls *"
     verdicts: [gotowa]
 
   - id: commit-fix
@@ -152,10 +148,9 @@ nodes:
       Zadanie: {{task}}
     allowedTools: [Read, Bash]
     bashAllowlist:
-      - "gh issue view *"
-      - "git diff *"
+      - "gh issue view"
+      - "git diff"
       - "ls"
-      - "ls *"
     verdicts: [pass, fail]
 
   - id: pr-body

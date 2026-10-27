@@ -50,10 +50,10 @@ assert allow, "bashAllowlist must be explicit"
 for entry in allow:
     assert "issue edit" not in entry and "api" not in entry.split()[:2], entry
     assert entry.split()[0] in ("gh", "mktemp"), entry
-assert "gh issue comment *" in allow
+assert "gh issue comment" in allow
 assert "Edit" not in a["allowedTools"]
 # the skill writes the comment body with Write to a mktemp file, so both must be allowed
-assert "Write" in a["allowedTools"] and "mktemp" in allow and "mktemp *" in allow
+assert "Write" in a["allowedTools"] and "mktemp" in allow
 print("ok")
 PY
   [ "$status" -eq 0 ]
@@ -97,5 +97,16 @@ d = yaml.safe_load(open(sys.argv[1]))
 to = {e["from"]: e["to"] for e in d["edges"]}
 types = {n["id"]: n["type"] for n in d["nodes"]}
 assert types[to["analyst.done"]] != "end", "analyst became terminal: revisit the CEZ:ASK rule"
+PY
+}
+
+# Regression: without {{task}} the agent never saw "Ocena pomysłu: <repo>#<nr>".
+@test "the sw-ocena analyst prompt carries the task text with the issue number" {
+  python3 - "$WF" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+node = next(n for n in d["nodes"] if n["id"] == "analyst")
+assert "{{task}}" in node["prompt"], node["prompt"]
+assert {"gh issue view", "gh issue comment", "mktemp"} <= set(node["bashAllowlist"]), node["bashAllowlist"]
 PY
 }
