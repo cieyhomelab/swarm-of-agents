@@ -12,7 +12,7 @@ setup() {
 
 @test "the skill carries the decision card exactly as in the spec" {
   grep -qxF 'CEZ:ASK {"questions":[{"header":"Decyzja","question":"Co robimy z tym pomysłem?","options":[{"label":"Zatwierdź"},{"label":"Odrzuć"}]}]}' "$SKILL"
-  line="$(grep -F 'CEZ:ASK {' "$SKILL" | head -1)"
+  line="$(grep -F '"header":"Decyzja"' "$SKILL" | head -1)"
   printf '%s' "${line#CEZ:ASK }" | jq -e '.questions[0].options | map(.label) == ["Zatwierdź", "Odrzuć"]'
 }
 
@@ -78,4 +78,24 @@ assert ("result.pass", "done") in edges and ("result.fail", "degraded") in edges
 print("ok")
 PY
   [ "$status" -eq 0 ]
+}
+
+# Regression: the analyst node is not terminal, so a turn that ends with a plain
+# question ends the node and the evaluation is lost without a decision.
+@test "the skill ends every turn before the decision with CEZ:ASK and reserves the Decyzja header" {
+  grep -q 'Każda tura kończy się pytaniem `CEZ:ASK`' "$SKILL"
+  grep -qi 'nigdy nie brzmi `Decyzja`' "$SKILL"
+  example="$(grep -E '^[[:space:]]*CEZ:ASK \{' "$SKILL" | grep -v '"header":"Decyzja"' | head -1)"
+  [ -n "$example" ]
+  printf '%s' "${example#*CEZ:ASK }" | jq -e '.questions | length == 1 and (.[0].header | length <= 12) and (.[0].options | length >= 2 and length <= 4)'
+}
+
+@test "the analyst node is not terminal, so the workflow relies on CEZ:ASK to wait" {
+  python3 - "$WF" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+to = {e["from"]: e["to"] for e in d["edges"]}
+types = {n["id"]: n["type"] for n in d["nodes"]}
+assert types[to["analyst.done"]] != "end", "analyst became terminal: revisit the CEZ:ASK rule"
+PY
 }

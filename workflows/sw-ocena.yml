@@ -6,6 +6,13 @@
 # The decision is read from the task history and applied by the check node
 # after the agent (sw-ocena-wynik), never taken from the agent's own words.
 #
+# The analyst node is not the terminal agent (the result check follows), so Cezar
+# waits for the owner only after a turn that ends with a CEZ:ASK line; a turn with a
+# plain question would end the node at once. The skill therefore ends EVERY turn
+# before the decision with CEZ:ASK (tests/unit/sw_ocena_skill.bats). Cezar's idle
+# timeout (resources.idleTimeoutMinutes) also closes a parked ask; the owner sets it
+# to 0 on the VPS (README), otherwise an evaluation ends after that many minutes.
+#
 # A failed agent turn ends with status success on purpose (no failure
 # notification, see sw-sweep): the gate finds the unfinished evaluation and
 # starts a new task (URUCHOM: OCENA <nr>).

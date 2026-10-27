@@ -70,13 +70,20 @@ On the VPS:
 
    It creates the private `sw-control` repo and registers it as a Cezar project if it is missing. It adds the `sw-*` labels, copies `sw-sweep` and `sw-ocena` into `.ai/cezar/workflows/`, opens the `sw-dziennik` issue and creates the `sw: przegląd co godzinę` automation, enabled. You can safely run it again: it only adds or updates what differs, and it never deletes automations. The last line is `STAN: OK` or `STAN: BLAD <reason>`.
 
-4. **Check health.**
+4. **Let evaluations wait for you.** Cezar closes a session that waits for an answer after `resources.idleTimeoutMinutes` (15 by default). An idea evaluation would then end without your decision. Turn the limit off (it applies to the whole Cezar; waiting tasks hold no slot):
+
+   ```bash
+   curl -s -X PUT http://127.0.0.1:4321/api/v1/workspace/config -H 'Content-Type: application/json' \
+     -d '{"resources":{"idleTimeoutMinutes":0}}'
+   ```
+
+5. **Check health.**
 
    ```bash
    ~/swarm-of-agents/bin/sw-doctor        # STAN: OK
    ```
 
-5. **Stage 2 only: set the deploy login.** Deployed apps are protected with your login. The deploy fails (`STAN: BLAD`) without this file:
+6. **Stage 2 only: set the deploy login.** Deployed apps are protected with your login. The deploy fails (`STAN: BLAD`) without this file:
 
    ```bash
    mkdir -p ~/.sw-deploy
@@ -86,7 +93,7 @@ On the VPS:
 
    Set `deploy.bindAddress` to a specific private IPv4 of the VPS, never `0.0.0.0`.
 
-6. **First run.** Wait for the next hourly cycle, or run the `sw-sweep` workflow by hand in the `sw-control` project in Cezar. When an idea is ready, a notification arrives on your phone.
+7. **First run.** Wait for the next hourly cycle, or run the `sw-sweep` workflow by hand in the `sw-control` project in Cezar. When an idea is ready, a notification arrives on your phone.
 
 ## Day to day
 
