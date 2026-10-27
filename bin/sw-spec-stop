@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# sw-spec-stop — the sw-spec task stopped without a merge (an agent failed, a git or
+# GitHub step failed, merge conditions not met). Without this step such a task ended
+# "done" while the idea stayed sw-stan-specyfikacja: the gate saw an active project
+# forever, nothing was retried and the owner got no notification (spec S4, S11).
+#
+#   - another live sw-spec task with the same text: nothing to do (WYNIK: POMINIETO);
+#   - fewer than "retriesPerTask" earlier sw-spec tasks with the same text: a new
+#     autonomous sw-spec task is started (WYNIK: PONOWIENIE <runId>) and the journal
+#     gets "ponowienie: …";
+#   - otherwise the project is paused through sw-spec-pr pause (label sw-stan-wstrzymany,
+#     idea closed, one "blocked" notification with the step that stopped the task).
+#
+# The task and its steps come from Cezar (CEZ_PROJECT_ID, CEZ_RUN_ID, set by Cezar for
+# check nodes). The idea number comes from the README of the checkout (sw-create-repo).
+# STAN: BLAD <powód> with exit 1 when Cezar or GitHub cannot be read.
+set -uo pipefail
+
+here="$(dirname "$0")"
+# shellcheck source=bin/lib/common.sh
+. "$here/lib/common.sh"
+sw_require jq curl
+
+fail() { echo "STAN: BLAD $*"; exit 1; }
+
+project="${CEZ_PROJECT_ID:-}"
+run_id="${CEZ_RUN_ID:-}"
+if [ -z "$project" ] || [ -z "$run_id" ]; then fail "brak CEZ_PROJECT_ID albo CEZ_RUN_ID"; fi
+retries="$(jq -r '.retriesPerTask // 2' "$SW_CONFIG")"
+[[ "$retries" =~ ^[0-9]+$ ]] || retries=2
+
+me="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project/runs/$run_id" 2>/dev/null)" \
+  || fail "nie mozna odczytac zadania $run_id"
+task="$(jq -r '.task // empty' <<<"$me")"
+[ -n "$task" ] || fail "zadanie $run_id nie ma tresci"
+# The last step that ran (not pending): where the task stopped.
+step="$(jq -r '[.steps[]? | select(.status != "pending" and .id != "stop")] | last | "\(.id) (\(.status))"' <<<"$me")"
+
+runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project/runs" 2>/dev/null)" \
+  || fail "nie mozna odczytac zadan projektu $project"
+read -r live earlier < <(jq -r --arg t "$task" --arg me "$run_id" '
+  (if type == "array" then . else (.runs // []) end)
+  | map(select(.workflow == "sw-spec" and .task == $t and .id != $me))
+  | "\(map(select(.status == "queued" or .status == "running" or .status == "waiting")) | length) \(length)"' <<<"$runs") \
+  || fail "niepoprawna lista zadan"
+
+if [ "$live" -gt 0 ]; then
+  echo "WYNIK: POMINIETO trwa inne zadanie sw-spec"
+  exit 0
+fi
+
+if [ "$earlier" -lt "$retries" ]; then
+  out="$(curl -sS --max-time 15 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+    --data-binary "$(jq -nc --arg t "$task" '{task: $t, workflow: "sw-spec", autonomous: true}')" \
+    "$SW_CEZAR_URL/api/v1/p/$project/runs" 2>/dev/null)" || fail "Cezar nie przyjal ponowienia"
+  code="${out##*$'\n'}"
+  [[ "$code" == 2* ]] || fail "Cezar nie uruchomil ponowienia sw-spec (HTTP $code)"
+  new="$(jq -r '.id // empty' <<<"${out%$'\n'*}")"
+  "$here/sw-log" "ponowienie: sw-spec w projekcie $project ($((earlier + 1))/$retries), zatrzymane na kroku $step" >/dev/null 2>&1 \
+    || sw_log "sw-spec-stop: nie mozna zapisac w dzienniku"
+  echo "WYNIK: PONOWIENIE ${new:-?}"
+  exit 0
+fi
+
+reason="specyfikacja zatrzymana na kroku $step po $((earlier + 1)) probach"
+# With a git checkout sw-spec-pr adds the link of the open PR; without one (the task
+# stopped before the clone was usable) the project is paused from the README link alone.
+if git remote get-url origin >/dev/null 2>&1; then
+  exec "$here/sw-spec-pr" pause "$reason"
+fi
+exec "$here/sw-spec-pause" "$reason"

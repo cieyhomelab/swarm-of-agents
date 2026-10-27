@@ -19,11 +19,13 @@
 #    agent chain and closes the idea with "sw-spec-gotowa"; stage 2 starts the sw-build
 #    workflow instead and the project goes to sw-stan-architektura.
 #
-# Every ending without a merge (remarks left after the last round, failed security
-# review, unmet merge conditions, a failed agent) ends the task with status success on
-# purpose: cezar-push alerts the owner for every failed task, and the spec allows no
-# such messages. The exception is the pause of the project (S4, S11): remarks left after
-# the last round and a failed security review of the PR go through bin/sw-spec-pr pause
+# Every ending without a merge ends the task with status success on purpose: cezar-push
+# alerts the owner for every failed task, and the spec allows no such messages. But it
+# never just stops: a failed security review (of the comments or of the PR) and remarks
+# left after the last round pause the project at once; any other stop (a failed agent,
+# git/GitHub step or merge condition) goes through bin/sw-spec-stop, which starts a new
+# sw-spec task up to retriesPerTask times and then pauses the project. Pausing goes
+# through bin/sw-spec-pr pause
 # (sw-spec-pause: label sw-stan-wstrzymany, pauseReason, idea closed, journal entry and
 # one "blocked" notification with the reason). The PR stays unmerged.
 #
@@ -192,6 +194,17 @@ nodes:
     command: |
       bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa specyfikacji: fail'
 
+  - id: pause-ustalenia
+    type: check
+    name: Wstrzymanie projektu po porażce przeglądu komentarzy
+    command: |
+      bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-pr" pause 'przegląd bezpieczeństwa komentarzy pod kartą: fail'
+
+  - id: stop
+    type: check
+    name: Ponowienie albo wstrzymanie po zatrzymaniu
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-spec-stop"
+
   - id: done
     type: end
     name: Specyfikacja zmergowana
@@ -205,41 +218,41 @@ nodes:
 edges:
   - { from: start, to: sec-ustalenia }
   - { from: sec-ustalenia.pass, to: analyst }
-  - { from: sec-ustalenia.fail, to: stopped }
-  - { from: sec-ustalenia.failed, to: stopped }
+  - { from: sec-ustalenia.fail, to: pause-ustalenia }
+  - { from: sec-ustalenia.failed, to: stop }
 
   - { from: analyst.gotowa, to: commit }
-  - { from: analyst.failed, to: stopped }
+  - { from: analyst.failed, to: stop }
   - { from: commit.done, to: push }
-  - { from: commit.nothing, to: stopped }
-  - { from: commit.failed, to: stopped }
+  - { from: commit.nothing, to: stop }
+  - { from: commit.failed, to: stop }
   - { from: push.done, to: draft-pr }
-  - { from: push.failed, to: stopped }
+  - { from: push.failed, to: stop }
   - { from: draft-pr.created, to: sha }
-  - { from: draft-pr.failed, to: stopped }
+  - { from: draft-pr.failed, to: stop }
 
   - { from: sha.pass, to: review }
-  - { from: sha.fail, to: stopped }
+  - { from: sha.fail, to: stop }
   - { from: review.zatwierdzona, to: security }
   - { from: review.uwagi, to: rounds }
-  - { from: review.failed, to: stopped }
+  - { from: review.failed, to: stop }
   - { from: rounds.repeat, to: fix }
   - { from: rounds.exhausted, to: pause-rounds }
   - { from: fix.gotowa, to: commit-fix }
-  - { from: fix.failed, to: stopped }
+  - { from: fix.failed, to: stop }
   - { from: commit-fix.done, to: push-fix }
   - { from: commit-fix.nothing, to: sha }
-  - { from: commit-fix.failed, to: stopped }
+  - { from: commit-fix.failed, to: stop }
   - { from: push-fix.done, to: sha }
-  - { from: push-fix.failed, to: stopped }
+  - { from: push-fix.failed, to: stop }
 
   - { from: security.pass, to: pr-body }
   - { from: security.fail, to: pause-security }
-  - { from: security.failed, to: stopped }
+  - { from: security.failed, to: stop }
   - { from: pr-body.pass, to: merge }
-  - { from: pr-body.fail, to: stopped }
+  - { from: pr-body.fail, to: stop }
   - { from: merge.pass, to: notify }
-  - { from: merge.fail, to: stopped }
+  - { from: merge.fail, to: stop }
   - { from: pause-rounds.pass, to: stopped }
   - { from: pause-rounds.fail, to: stopped }
   - { from: pause-security.pass, to: stopped }
@@ -248,3 +261,7 @@ edges:
   - { from: notify.fail, to: handover }
   - { from: handover.pass, to: done }
   - { from: handover.fail, to: done }
+  - { from: pause-ustalenia.pass, to: stopped }
+  - { from: pause-ustalenia.fail, to: stopped }
+  - { from: stop.pass, to: stopped }
+  - { from: stop.fail, to: stopped }
