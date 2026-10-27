@@ -349,7 +349,7 @@ Granice:
 #### Skille (`skills/sw-*`)
 | Skill | Model (`config/sw.json`) | Etap | Zadanie |
 |-------|--------------------------|------|---------|
-| `sw-start` | `chores` | 1 | Jednorazowa konfiguracja `sw-control`: utworzenie jako prywatne (jeśli brak), etykiety `sw-*`, workflowy, automatyzacja „sw: przegląd co godzinę” (aktualizacja po nazwie przez `list`, tylko nazwy `sw: …`; `delete` niedozwolone w `bashAllowlist`), issue dziennika. |
+| `sw-start` | `chores` | 1 | Jednorazowa konfiguracja `sw-control`: utworzenie jako prywatne (jeśli brak), etykiety `sw-*`, workflowy, automatyzacja „sw: przegląd co godzinę” (aktualizacja po nazwie przez `list`, tylko nazwy `sw: …`; `delete` niedozwolone w `bashAllowlist`), issue dziennika, przewinięcie lokalnej kopii `sw-control` w Cezarze (`git pull --ff-only`; Cezar czyta workflowy z niej, nie z GitHuba). |
 | `sw-generator` | `generator` | 1 | S1: pomysł, sprawdzenie w sieci, odrzucanie duplikatów i kategorii wykluczonych, karta pomysłu w issue. |
 | `sw-analityk` | `analyst` | 1 | Tryb `ocena` (S2/S3: rozmowa, podsumowanie, karta decyzji) i tryb `spec` (S4: specyfikacja aplikacji bez dopytywania, luki w „Założeniach”). |
 | `sw-recenzent` | `reviewer` | 1 | Niezależny przegląd specyfikacji (S4) i recenzja PR (S8); werdykty `zatwierdzona`/`uwagi` oraz `approve`/`changes`. |
