@@ -226,3 +226,40 @@ readme() { jq -r --arg r "$1" '.repos[$r].files["README.md"].content' <<<"$(stat
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "WYNIK: POMINIETO brak zatwierdzonego pomyslu bez repozytorium" ]
 }
+
+# Regression: Cezar reads workflows from its local checkout; the seeded sw-spec.yml
+# reached only GitHub, so POST runs answered 404 "unknown workflow".
+make_checkout() { # make_checkout <project id> — bare origin ahead of Cezar's checkout, no upstream tracking
+  g() { git -c user.name=t -c user.email=t@example.invalid -c init.defaultBranch=main "$@"; }
+  g init -q --bare "$WORK/origin.git"
+  g init -q "$WORK/checkout"
+  g -C "$WORK/checkout" commit -q --allow-empty -m init
+  g -C "$WORK/checkout" remote add origin "$WORK/origin.git"
+  g -C "$WORK/checkout" push -q origin HEAD:main
+  g clone -q "$WORK/origin.git" "$WORK/other"
+  mkdir -p "$WORK/other/.ai/cezar/workflows" && echo "name: sw-spec" > "$WORK/other/.ai/cezar/workflows/sw-spec.yml"
+  g -C "$WORK/other" add -A && g -C "$WORK/other" commit -q -m seed && g -C "$WORK/other" push -q origin HEAD:main
+  curl -fsS -X POST "$SW_CEZAR_URL/__control" -d "{\"project_roots\": {\"$1\": \"$WORK/checkout\"}}" >/dev/null
+}
+
+@test "Cezar's checkout of the new project is fast-forwarded before the sw-spec task starts" {
+  curl -fsS -X POST "$SW_CEZAR_URL/__control" -d "$(jq -nc '{issues: [{number: 7, state: "open", title: "Planer",
+    body: "x\n<!-- sw:meta {} -->", labels: [{name: "sw-pomysl"}, {name: "sw-zatwierdzony"}]}]}')" >/dev/null
+  make_checkout proj-planer
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"zaktualizowano kopie $WORK/checkout"* ]]
+  [ -f "$WORK/checkout/.ai/cezar/workflows/sw-spec.yml" ]
+  [ "$(git -C "$WORK/checkout" rev-parse HEAD)" = "$(git -C "$WORK/origin.git" rev-parse main)" ]
+}
+
+@test "a diverged checkout of the new project stops before the sw-spec task" {
+  curl -fsS -X POST "$SW_CEZAR_URL/__control" -d "$(jq -nc '{issues: [{number: 7, state: "open", title: "Planer",
+    body: "x\n<!-- sw:meta {} -->", labels: [{name: "sw-pomysl"}, {name: "sw-zatwierdzony"}]}]}')" >/dev/null
+  make_checkout proj-planer
+  git -c user.name=t -c user.email=t@example.invalid -C "$WORK/checkout" commit -q --allow-empty -m local
+  run "$ROOT/bin/sw-create-repo" 7
+  [ "$status" -eq 1 ]
+  [[ "${lines[-1]}" == "STAN: BLAD nie mozna przewinac $WORK/checkout"* ]]
+  [ "$(curl -fsS -X POST -d '{}' "$SW_CEZAR_URL/__control" | jq '[.runs[] | select(.workflow == "sw-spec")] | length')" -eq 0 ]
+}

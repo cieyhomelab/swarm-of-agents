@@ -232,9 +232,31 @@ patched="$(jq -nc --argjson n "$max_parallel" '{maxParallel: $n}' | curl -sS --m
   -X PATCH -H 'Content-Type: application/json' --data-binary @- "$SW_CEZAR_URL/api/v1/projects/$project_id" 2>/dev/null)"
 [[ "$patched" =~ ^2 ]] || fail "nie mozna ustawic maxParallel projektu $project_id (HTTP $patched)"
 
+# Cezar loads workflows from its LOCAL checkout of the project, so the files seeded above
+# through the GitHub API stay invisible to it (POST runs: 404 "unknown workflow") until that
+# checkout is fast-forwarded. fetch + merge --ff-only works also without upstream tracking
+# (a project from projects/create is pushed without it). A diverged checkout is an error.
+sync_checkout() {
+  local root branch before
+  root="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/projects" 2>/dev/null \
+    | jq -r --arg id "$project_id" '[.projects[]? | select(.id == $id) | .root // empty][0] // empty' 2>/dev/null)" || root=""
+  if [ -z "$root" ]; then
+    info "Cezar nie podal katalogu projektu $project_id; pomijam aktualizacje kopii"
+    return 0
+  fi
+  before="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || fail "$root nie jest repozytorium git"
+  branch="$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null)" || fail "nie mozna ustalic galezi w $root"
+  git -C "$root" fetch --quiet origin "$branch" >/dev/null 2>&1 \
+    || fail "nie mozna pobrac origin/$branch do $root"
+  git -C "$root" merge --ff-only --quiet FETCH_HEAD >/dev/null 2>&1 \
+    || fail "nie mozna przewinac $root do origin/$branch (git merge --ff-only)"
+  [ "$(git -C "$root" rev-parse HEAD)" = "$before" ] || info "zaktualizowano kopie $root"
+}
+
 # The specification task of the new project. The task text carries no idea content: the
 # agents read the card and the sw:ustalenia comment themselves.
 if [ -r "$SW_ROOT/workflows/sw-spec.yml" ]; then
+  sync_checkout
   spec_task="Specyfikacja aplikacji: $control#$number"
   runs="$(curl -fsS --max-time 10 "$SW_CEZAR_URL/api/v1/p/$project_id/runs" 2>/dev/null)" \
     || fail "nie mozna odczytac zadan Cezara projektu $project_id"
