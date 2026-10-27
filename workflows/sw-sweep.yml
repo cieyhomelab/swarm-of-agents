@@ -5,8 +5,10 @@
 # equal to config/sw.json); a failed attempt is written to the journal, the first
 # good one becomes an idea card and bin/sw-start-ocena starts its sw-ocena task.
 # On "URUCHOM: OCENA <nr>" (an evaluation task that got lost, e.g. after a Cezar
-# restart) sw-start-ocena starts a new task for that idea. Further agents are
-# added by later steps.
+# restart) sw-start-ocena starts a new task for that idea. On "URUCHOM: SPEC <nr>"
+# (an approved idea without a repository) bin/sw-create-repo creates the private
+# application repository and starts its sw-spec task; sw-spec then leads to
+# sw-build or to the handover, by the stage switch in config/sw.json.
 #
 # A broken runtime ends the task with status success on purpose: cezar-push
 # alerts the owner for every task entering "failed", and the spec allows no
@@ -60,6 +62,16 @@ nodes:
     name: Zaginione zadanie oceny?
     condition: { kind: output, ref: gate.output, op: contains, value: "URUCHOM: OCENA" }
 
+  - id: is-spec
+    type: if
+    name: Zatwierdzony pomysł bez repozytorium?
+    condition: { kind: output, ref: gate.output, op: contains, value: "URUCHOM: SPEC" }
+
+  - id: create-repo
+    type: check
+    name: Repozytorium i specyfikacja aplikacji
+    command: bash "${SW_HOME:-$HOME/swarm-of-agents}/bin/sw-create-repo"
+
   - id: card-created
     type: if
     name: Powstała nowa karta?
@@ -99,7 +111,11 @@ edges:
   - { from: is-generator.true, to: attempts }
   - { from: is-generator.false, to: is-ocena }
   - { from: is-ocena.true, to: start-ocena }
-  - { from: is-ocena.false, to: done }
+  - { from: is-ocena.false, to: is-spec }
+  - { from: is-spec.true, to: create-repo }
+  - { from: is-spec.false, to: done }
+  - { from: create-repo.pass, to: done }
+  - { from: create-repo.fail, to: degraded }
   - { from: attempts.repeat, to: generator }
   - { from: attempts.exhausted, to: no-idea }
   - { from: generator.karta, to: card }

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# sw-create-repo <nr> — creates the private application repository of an approved
+# sw-create-repo [nr] — creates the private application repository of an approved
 # idea ("sw-zatwierdzony" without "repo" in the <!-- sw:meta {...} --> block).
+# Without <nr> (the sweep workflow after "URUCHOM: SPEC <nr>") the target is the open
+# approved idea without a repository with the lowest number, the one the gate named.
 #
 # Steps, each one reading first so that an interrupted run can be repeated:
 #   1. name: the idea title in kebab-case; a taken name gets the first free suffix
@@ -46,7 +48,23 @@ max_parallel="$(jq -r '.maxParallelAgents // 3' "$SW_CONFIG")"
 [[ "$max_parallel" =~ ^[0-9]+$ ]] && [ "$max_parallel" -gt 0 ] || max_parallel=3
 
 number="${1:-}"
-[[ "$number" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-create-repo <numer issue>"
+if [ -z "$number" ]; then
+  # Without <nr> the target is the idea the gate answers "URUCHOM: SPEC <nr>" for: the
+  # open approved idea without a repository with the lowest number (same order as sw-gate).
+  list="$(gh api --paginate "repos/$control/issues?labels=sw-zatwierdzony&state=open&per_page=100" 2>/dev/null)" \
+    || fail "nie mozna odczytac issues $control"
+  number="$(printf '%s' "$list" | jq -rs '
+    [.[] | (if type == "array" then .[] else . end) | select(.pull_request == null)
+         | select(any(.labels[]?; .name == "sw-pomysl"))
+         | select(((.body // "") | capture("<!-- sw:meta (?<j>\\{.*\\}) -->"; "m").j? // "{}"
+                   | (try fromjson catch {}) | .repo // "") == "")
+         | .number] | min // empty')" || fail "niepoprawna lista issues"
+  if [ -z "$number" ]; then
+    echo "WYNIK: POMINIETO brak zatwierdzonego pomyslu bez repozytorium"
+    exit 0
+  fi
+fi
+[[ "$number" =~ ^[0-9]+$ ]] || sw_die "uzycie: sw-create-repo [numer issue]"
 
 # read_issue — fresh JSON of the issue in $issue; only an open approved idea
 # without a repository passes (status 1 = nothing to do).

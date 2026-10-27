@@ -103,3 +103,35 @@ create() { run bash "$home/bin/sw-create-repo" "$1"; }
   [ "$status" -eq 0 ]
   [ "$(state | jq '[.runs[] | select(.workflow == "sw-spec")] | length')" -eq 1 ]
 }
+
+# The whole hourly cycle, as Cezar walks workflows/sw-sweep.yml: an approved idea must
+# not stop at the gate decision (regression: "URUCHOM: SPEC" had no branch and the
+# sweep ended in "done", so no repository and no sw-spec task were ever created).
+sweep() { run python3 "$home/tests/tools/run_workflow.py" "$home/workflows/sw-sweep.yml"; }
+
+@test "S4 the hourly sweep turns an approved idea into a repository and a sw-spec task" {
+  control "{\"issues\": [$(journal), $(approved 2 'Planer posiłków')]}"
+  sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRACE create-repo pass"* ]]
+  [[ "$output" == *"END done success"* ]]
+  s="$(state)"
+  [ "$(jq '.repos["cieyhomelab/planer-posilkow"].private' <<<"$s")" = true ]
+  [ "$(jq -c '[.issues[] | select(.number == 2) | .labels[].name]' <<<"$s")" = '["sw-pomysl","sw-stan-specyfikacja"]' ]
+  [ "$(jq '[.runs[] | select(.workflow == "sw-spec" and .autonomous == true)] | length' <<<"$s")" -eq 1 ]
+}
+
+@test "S4 sw-create-repo without a number takes the approved idea the gate named" {
+  control "{\"issues\": [$(journal), $(approved 3 'Drugi pomysł'), $(approved 2 'Planer posiłków')]}"
+  [ "$(gate)" = "URUCHOM: SPEC 2" ]
+  run bash "$home/bin/sw-create-repo"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "WYNIK: REPO cieyhomelab/planer-posilkow proj-planer-posilkow" ]
+}
+
+@test "S4 sw-create-repo without a number and without an approved idea does nothing" {
+  control "{\"issues\": [$(journal)]}"
+  run bash "$home/bin/sw-create-repo"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "WYNIK: POMINIETO brak zatwierdzonego pomyslu bez repozytorium" ]
+}
